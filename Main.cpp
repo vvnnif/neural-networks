@@ -1,21 +1,58 @@
+//=======================================================================
+// Finn van Vlaanderen
+// A6A
+// Profielwerkstuk "Neurale Netwerken"
+// Programmeergedeelte / deelvraag 4
+//=======================================================================
+
 // Mijn eigen geschreven library voor o.a lineaire algebra, 
 // documentatie is geschreven in het Engels omdat het een hobbyproject was.
 #include "ala.h"	
-#include <fstream>
 
 // Recht van het internet afgehaald, is wel zo handig.
 // Moest alsnog een paar aanpassingen maken om het te laten werken.
 #include "mnist/mnist_reader_less.hpp"
+
+// SDL-library voor datavisualisatie. 
+#include <SDL.h>
+
 #include <string>
+#include <fstream>
+
+// Hier is de visualisatie-component van het project, alhoewel het niets
+// toevoegt aan de theorie achter het profielwerkstuk kunt u het natuurlijk
+// wel bekijken.
+#include "visual.h"
 
 #define uint unsigned int
 
 using namespace ala;
 
+static Vector<uint8_t> tr_labels, ts_labels;	// Labels
+static Matrix<uint8_t> tr_images, ts_images;	// Afbeeldingen
+const int im_width = 28;
+
 void print_mnist_image(Matrix<uint8_t> data, int im_size, int r);
+void init_mnist();
+
+// Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
+// matrices (afbeeldingen).
+void init_mnist()
+{
+	std::cout << "Parsing MNIST data..\n";
+
+	auto dataset = mnist::read_dataset();
+
+	tr_labels = dataset.training_labels;
+	tr_images = dataset.training_images;
+	ts_labels = dataset.test_labels;
+	ts_images = dataset.test_images;
+
+	std::cout << "Successfully parsed MNIST data\n";
+}
 
 // Print een afbeelding uit de mnist-dataset in de console, 
-// uitgedrukt in de numerieke waarden van elke pixel.
+// uitgedrukt in de waarden van elke pixel.
 // \param r De hoeveelste afbeelding die gelezen moet worden.
 // \param im_size De breedte/lengte van de afbeeldingen.
 // \param data De afbeeldingsmatrix om uit te lezen.
@@ -29,17 +66,21 @@ void print_mnist_image(Matrix<uint8_t> data, int im_size, int r)
 	}
 }
 
-int main()
+int main(int argc, char **argv)
 {
-	// Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
-	// matrices (afbeeldingen). 
-	auto dataset = mnist::read_dataset();
-	Vector<uint8_t> tr_labels(dataset.training_labels);
-	Matrix<uint8_t> tr_images(dataset.training_images);
-	Vector<uint8_t> ts_labels(dataset.test_labels);
-	Matrix<uint8_t> ts_images(dataset.test_images);
-	
-	print_mnist_image(ts_images, 28, 1);
+	init_mnist();	// Laad de MNIST-dataset.
 
-	std::cin.get();
+	// Maak een venster voor visualisatie. 
+	const int win_height = 600, win_width = 800;
+	visual::Window window("Een interessante titel", win_height, win_width);
+
+	// Test, verwijder later.
+	print_mnist_image(ts_images, im_width, 1);
+
+	while (!window.isClosed())
+	{
+		window.pollEvents();
+	}
+
+	return 0;
 }
