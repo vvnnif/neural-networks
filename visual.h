@@ -78,6 +78,7 @@ namespace visual
 			std::cerr << "Failed to create SDL window";
 			return 0;
 		}
+		std::cout << "Successfully initialized SDL window!\n";
 		return 1;
 	}
 }
