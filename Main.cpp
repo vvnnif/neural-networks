@@ -34,7 +34,12 @@ const int im_width = 28;
 
 const int win_height = 600, win_width = 800;
 const char* win_title = "Een interessante titel";
+
 static visual::Window window = visual::Window(win_title, win_width, win_height);
+
+const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
+const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
+const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
 void print_mnist_image(Matrix<uint8_t> data, int im_size, int r);
 void init_mnist();
@@ -74,16 +79,19 @@ int main(int argc, char **argv)
 {
 	init_mnist(); // Laad de MNIST-dataset.
 
-	// Test, verwijder later.
-	print_mnist_image(ts_images, im_width, 1);
+	// Laad een cijfer uit de dataset voor later gebruik. 
+	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
+	grid.init_data();
 
-	visual::DataGrid grid(&ts_images, 16, 0, 0);
-	grid.init_data(window);
-
+	// Gebruik de pijlentoetsen om naar andere cijfers in de dataset te gaan.
+	// links: index 1 minder
+	// rechts: index 1 meer
+	// beneden: willekeurige index
 	while (!window.isClosed())
 	{
-		grid.draw();
+		grid.draw(); // Teken het cijfer op het scherm.
 		
+		grid.pollEvents();
 		window.pollEvents();
 		window.clear();
 	}

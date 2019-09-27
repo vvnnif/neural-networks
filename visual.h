@@ -130,15 +130,17 @@ namespace visual
 		uint8_t r, g, b;
 	};
 
-	class DataGrid
+	class DataGrid : public Window
 	{
 	public:
-		DataGrid(Matrix<uint8_t>* data,
+		DataGrid(const Window& window, Matrix<uint8_t>* data,
 			const int _pixelScaleFactor,
 			const int _gridOffset_x, const int _gridOffset_y);
+		~DataGrid();
 		void draw() const;
-		void init_data(const Window& window);
-		void update_data();
+		void init_data();
+		void load_data(int row);
+		void pollEvents();
 	private:
 		Matrix<uint8_t>* data;
 		int pixelScaleFactor;
@@ -147,7 +149,39 @@ namespace visual
 		std::vector<Pixel*> pixels;
 	};
 
-	void DataGrid::init_data(const Window& window)
+	DataGrid::~DataGrid()
+	{
+		for (Pixel* p : pixels) delete p;
+	}
+
+	void DataGrid::pollEvents()
+	{
+		SDL_Event event;
+
+		if (SDL_PollEvent(&event))
+		{
+			if (event.type == SDL_KEYDOWN)
+			{
+				switch (event.key.keysym.sym)
+				{
+				case SDLK_RIGHT:
+					dataMatrix_row < data->GetRows() ? dataMatrix_row++ : 0;
+					load_data(dataMatrix_row);
+					break;
+				case SDLK_LEFT:
+					dataMatrix_row > 0 ? dataMatrix_row-- : 0;
+					load_data(dataMatrix_row);
+					break;
+				case SDLK_DOWN:
+					dataMatrix_row = ala::GetUniformRandom<int>(0, data->GetRows() - 1);
+					load_data(dataMatrix_row);
+					break;
+				}
+			}
+		}
+	}
+
+	void DataGrid::init_data()
 	{
 		int cols = data->GetCols();
 		for (int i = 0; i < cols; i++)
@@ -155,31 +189,36 @@ namespace visual
 			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
 			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
 			uint c = (uint)data->at(dataMatrix_row, i);
-			Pixel* p = new Pixel(window, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
+			Pixel* p = new Pixel(*this, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
 			pixels.push_back(p);
 		}
 	}
-
-	void DataGrid::update_data()
+	
+	void DataGrid::load_data(int row)
 	{
-
+		dataMatrix_row = row;
+		int cols = data->GetCols();
+		for (int i = 0; i < cols; i++)
+		{
+			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
+			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
+			uint c = (uint)data->at(dataMatrix_row, i);
+			pixels[i] = new Pixel(*this, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
+		}
 	}
 
-	DataGrid::DataGrid(Matrix<uint8_t>* _data, const int _pixelScaleFactor,
+	DataGrid::DataGrid(const Window& window, Matrix<uint8_t>* _data, const int _pixelScaleFactor,
 		const int _gridOffset_x, const int _gridOffset_y)
-		: data(_data), pixelScaleFactor(_pixelScaleFactor),
+		: Window(window), data(_data), pixelScaleFactor(_pixelScaleFactor),
 		gridOffset_x(_gridOffset_x), gridOffset_y(_gridOffset_y)
 	{
+		srand(time(NULL));
 		dataMatrix_row = ala::GetUniformRandom<int>(0, data->GetRows() - 1);
 	}
 
 	void DataGrid::draw() const
 	{
-		std::cout << "[Debug] Drawing pixel to screen..\n";
-		for (Pixel* p : pixels)
-		{
-			p->draw();
-		}
+		for (Pixel* p : pixels) p->draw();
 	}
 
 	Pixel::Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b)
