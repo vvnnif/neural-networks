@@ -19,13 +19,14 @@ namespace visual
 		void pollEvents();
 		void clear() const;
 		inline bool isClosed() const;
-		
 	private:
 		bool init();
 
 		const char* title;
 		int w, h;
 		bool closed = false;
+
+		SDL_Window* window = nullptr;
 
 		int gridOffset_y = 0;
 		int gridOffset_x = 0;
@@ -34,87 +35,7 @@ namespace visual
 
 	protected:
 		SDL_Renderer* renderer = nullptr;
-		SDL_Window* window = nullptr;
 	};
-	
-	class Pixel : public Window
-	{
-	public:
-		Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b);
-		void draw() const;
-	private:
-		int width, height;
-		int x, y;
-		uint8_t r, g, b;
-	};
-
-	class DataGrid
-	{
-	public:
-		DataGrid(Matrix<uint8_t>* data,
-			const int _pixelScaleFactor,
-			const int _gridOffset_x, const int _gridOffset_y);
-		void draw() const;
-		void init_data(const Window& window);
-		void update_data();
-	private:
-		Matrix<uint8_t>* data;
-		int pixelScaleFactor;
-		int gridOffset_x, gridOffset_y;
-		int dataMatrix_row;
-		std::vector<Pixel> pixels;
-	};
-	
-	void DataGrid::init_data(const Window& window)
-	{
-		int cols = data->GetCols();
-		for (int i = 0; i < cols; i++)
-		{
-			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
-			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
-			uint c = (uint) data->at(dataMatrix_row, i);
-			Pixel p(window, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
-			pixels.push_back(p);
-		}
-	}
-
-	void DataGrid::update_data()
-	{
-		
-	}
-
-	DataGrid::DataGrid(Matrix<uint8_t>* _data, const int _pixelScaleFactor,
-		const int _gridOffset_x, const int _gridOffset_y)
-		: data(_data), pixelScaleFactor(_pixelScaleFactor),
-		gridOffset_x(_gridOffset_x), gridOffset_y(_gridOffset_y)
-	{
-		dataMatrix_row = ala::GetUniformRandom<int>(0, data->GetRows() - 1);
-	}
-	
-	void DataGrid::draw() const
-	{
-		std::cout << "[Debug] Drawing pixel to screen..\n";
-		for (Pixel p : pixels)
-		{
-			p.draw();
-		}
-	}
-
-	Pixel::Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b)
-		: Window(_window), height(_height), width(_width), x(_x), y(_y), 
-		r(_r), g(_g), b(_b){}
-
-	void Pixel::draw() const
-	{
-		SDL_Rect rect;
-		rect.h = height;
-		rect.w = width;
-		rect.x = x;
-		rect.y = y;
-
-		SDL_SetRenderDrawColor(renderer, r, g, b, 255);
-		SDL_RenderFillRect(renderer, &rect);
-	}
 
 	void Window::clear() const
 	{
@@ -196,5 +117,84 @@ namespace visual
 		}
 
 		return 1;
+	}
+
+	class Pixel : public Window
+	{
+	public:
+		Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b);
+		void draw() const;
+	private:
+		int width, height;
+		int x, y;
+		uint8_t r, g, b;
+	};
+
+	class DataGrid
+	{
+	public:
+		DataGrid(Matrix<uint8_t>* data,
+			const int _pixelScaleFactor,
+			const int _gridOffset_x, const int _gridOffset_y);
+		void draw() const;
+		void init_data(const Window& window);
+		void update_data();
+	private:
+		Matrix<uint8_t>* data;
+		int pixelScaleFactor;
+		int gridOffset_x, gridOffset_y;
+		int dataMatrix_row;
+		std::vector<Pixel*> pixels;
+	};
+
+	void DataGrid::init_data(const Window& window)
+	{
+		int cols = data->GetCols();
+		for (int i = 0; i < cols; i++)
+		{
+			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
+			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
+			uint c = (uint)data->at(dataMatrix_row, i);
+			Pixel* p = new Pixel(window, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
+			pixels.push_back(p);
+		}
+	}
+
+	void DataGrid::update_data()
+	{
+
+	}
+
+	DataGrid::DataGrid(Matrix<uint8_t>* _data, const int _pixelScaleFactor,
+		const int _gridOffset_x, const int _gridOffset_y)
+		: data(_data), pixelScaleFactor(_pixelScaleFactor),
+		gridOffset_x(_gridOffset_x), gridOffset_y(_gridOffset_y)
+	{
+		dataMatrix_row = ala::GetUniformRandom<int>(0, data->GetRows() - 1);
+	}
+
+	void DataGrid::draw() const
+	{
+		std::cout << "[Debug] Drawing pixel to screen..\n";
+		for (Pixel* p : pixels)
+		{
+			p->draw();
+		}
+	}
+
+	Pixel::Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b)
+		: Window(_window), height(_height), width(_width), x(_x), y(_y),
+		r(_r), g(_g), b(_b) {}
+
+	void Pixel::draw() const
+	{
+		SDL_Rect rect;
+		rect.h = height;
+		rect.w = width;
+		rect.x = x;
+		rect.y = y;
+
+		SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+		SDL_RenderFillRect(renderer, &rect);
 	}
 }

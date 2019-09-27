@@ -79,10 +79,11 @@ int main(int argc, char **argv)
 
 	visual::DataGrid grid(&ts_images, 16, 0, 0);
 	grid.init_data(window);
+
 	while (!window.isClosed())
 	{
 		grid.draw();
-
+		
 		window.pollEvents();
 		window.clear();
 	}
