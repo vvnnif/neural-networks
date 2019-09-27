@@ -28,13 +28,13 @@
 
 using namespace ala;
 
-static Vector<uint8_t> tr_labels, ts_labels;	// Labels
-static Matrix<uint8_t> tr_images, ts_images;	// Afbeeldingen
+static Vector<uint8_t> tr_labels, ts_labels; // Labels
+static Matrix<uint8_t> tr_images, ts_images; // Afbeeldingen
 const int im_width = 28;
 
 const int win_height = 600, win_width = 800;
 const char* win_title = "Een interessante titel";
-static visual::Window window = visual::Window(win_title, win_height, win_width);
+static visual::Window window = visual::Window(win_title, win_width, win_height);
 
 void print_mnist_image(Matrix<uint8_t> data, int im_size, int r);
 void init_mnist();
@@ -72,14 +72,19 @@ void print_mnist_image(Matrix<uint8_t> data, int im_size, int r)
 
 int main(int argc, char **argv)
 {
-	init_mnist();	// Laad de MNIST-dataset.
+	init_mnist(); // Laad de MNIST-dataset.
 
 	// Test, verwijder later.
 	print_mnist_image(ts_images, im_width, 1);
 
+	visual::DataGrid grid(&ts_images, 16, 0, 0);
+	grid.init_data(window);
 	while (!window.isClosed())
 	{
+		grid.draw();
+
 		window.pollEvents();
+		window.clear();
 	}
 
 	return 0;
