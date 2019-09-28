@@ -13,12 +13,11 @@
 // Moest alsnog een paar aanpassingen maken om het te laten werken.
 #include "mnist/mnist_reader_less.hpp"
 
-// SDL-library voor datavisualisatie. 
+// SDL-library, voor datavisualisatie. 
 #include <SDL.h>
 
 #include <string>
 #include <fstream>
-#include <deque>
 
 // Hier is de visualisatie-component van het project, alhoewel het niets
 // toevoegt aan de theorie achter het profielwerkstuk kunt u het natuurlijk
@@ -29,8 +28,8 @@
 
 using namespace ala;
 
-static Vector<uint8_t> tr_labels, ts_labels; // Labels
-static Matrix<uint8_t> tr_images, ts_images; // Afbeeldingen
+static Vector<uint> tr_labels, ts_labels; // Labels
+static Matrix<uint> tr_images, ts_images; // Afbeeldingen
 const int im_width = 28;
 
 const int win_height = 600, win_width = 800;
@@ -42,18 +41,19 @@ const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
 const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
 const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
-void print_mnist_image(Matrix<uint8_t> data, int im_size, int r);
+void print_mnist_image(Matrix<float> data, int im_size, int r);
 void init_mnist();
 
 double sigmoid(double x);
 double sigmoidPrime(double x);
 void init_network();
 
+
 // Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
 // matrices (afbeeldingen).
 void init_mnist()
 {
-	std::cout << "Parsing MNIST data..\n";
+	std::cout << "[MNIST] Parsing MNIST data..\n";
 
 	auto dataset = mnist::read_dataset();
 
@@ -61,8 +61,8 @@ void init_mnist()
 	tr_images = dataset.training_images;
 	ts_labels = dataset.test_labels;
 	ts_images = dataset.test_images;
-
-	std::cout << "Successfully parsed MNIST data\n";
+	
+	std::cout << "[MNIST] Successfully parsed MNIST data\n";
 }
 
 // Print een afbeelding uit de mnist-dataset in de console, 
@@ -70,7 +70,7 @@ void init_mnist()
 // \param r De hoeveelste afbeelding die gelezen moet worden.
 // \param im_size De breedte/lengte van de afbeeldingen.
 // \param data De afbeeldingsmatrix om uit te lezen.
-void print_mnist_image(Matrix<uint8_t> data, int im_size, int r)
+void print_mnist_image(Matrix<uint> data, int im_size, int r)
 {
 	int s = im_size * im_size;
 	for (int i = 0; i < s; i++)
@@ -96,6 +96,7 @@ double sigmoidPrime(double x)
 
 typedef double(*function)(double); // Voor het gemak, scheelt schrijfwerk
 
+// De implementatie van het neurale netwerk. 
 class Network
 {
 public:
@@ -108,18 +109,52 @@ public:
 	function GetActivationFunctionDerivative() const;
 
 	Network* AddHiddenLayer(int n_neurons);
+
+	void init_biases();
+	void init_weights();
+	void init_activations();
+
+	void FeedForward(int row);
 private:
 	function activation_function = nullptr; // Activatiefunctie van het netwerk.
 	function activation_function_derivative = nullptr; // Zijn afgeleide.
-	std::vector<int> hiddenLayerNeurons; // Aantal neuronen per verborgen laag.
+	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 	int inputNeurons, outputNeurons; // Aantal neuronen in de input- en outputlagen.
+
+	std::vector<ala::Vector<float>> activations; 
+	std::vector<ala::Vector<float>> biases;
+	std::vector<ala::Matrix<float>> weights;
 };
+
+void Network::init_activations()
+{
+	
+}
+
+void Network::init_biases()
+{
+	
+}
+
+void Network::init_weights()
+{
+
+}
+
+void Network::FeedForward(int row)
+{
+	Vector<float> a_0(tr_images.GetCols(), [&row](int i)->float
+		{
+			return (float) tr_images.at(row, i) / 255;
+		});
+	activations[0] = a_0;
+}
 
 // Voeg een verborgen laag toe aan het netwerk.
 // \param n_neurons Aantal neuronen van de verborgen laag.
 Network* Network::AddHiddenLayer(int n_neurons)
 {
-	hiddenLayerNeurons.push_back(n_neurons);
+	layerNeurons.push_back(n_neurons);
 	std::cout << "[Network] Adding hidden layer with " << n_neurons << " neurons..\n";
 	return this;
 }
@@ -127,7 +162,11 @@ Network* Network::AddHiddenLayer(int n_neurons)
 // \param input_neurons Aantal neuronen in de inputlaag (aantal pixels in afbeelding)
 // \param output_neurons Aantal neuronen in de outputlaag (aantal verschillende te herkennen getallen)
 Network::Network(int input_neurons, int output_neurons)
-	: inputNeurons(input_neurons), outputNeurons(output_neurons){}
+	: inputNeurons(input_neurons), outputNeurons(output_neurons)
+{
+	ala::Vector<float> a_0(inputNeurons, 0);
+	activations.push_back(a_0);
+}
 Network::~Network(){}
 
 // \param _activation_function De activatiefunctie van het neurale netwerk, e.g sigmoid, reLU, etc.
@@ -161,7 +200,7 @@ static Network* network; // Het neurale netwerk die we gaan gebruiken.
 // activatiefunctie, et cetera.
 void init_network()
 {
-	std::cout << "Initializing neural network..\n";
+	std::cout << "[Network] Initializing neural network..\n";
 
 	//================// Netwerkinitializatie start
 
@@ -174,7 +213,7 @@ void init_network()
 
 	//================// Netwerkinitializatie stop
 
-	std::cout << "Successfully initialized neural network\n";
+	std::cout << "[Network] Successfully initialized neural network\n";
 }
 
 int main(int argc, char **argv)
@@ -193,8 +232,8 @@ int main(int argc, char **argv)
 	while (!window.isClosed())
 	{
 		grid.draw(); // Teken het cijfer op het scherm.
-		
 		grid.pollEvents();
+
 		window.pollEvents();
 		window.clear();
 	}
