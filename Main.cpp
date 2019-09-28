@@ -18,6 +18,7 @@
 
 #include <string>
 #include <fstream>
+#include <iomanip>
 
 // Hier is de visualisatie-component van het project, alhoewel het niets
 // toevoegt aan de theorie achter het profielwerkstuk kunt u het natuurlijk
@@ -47,7 +48,6 @@ void init_mnist();
 double sigmoid(double x);
 double sigmoidPrime(double x);
 void init_network();
-
 
 // Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
 // matrices (afbeeldingen).
@@ -100,7 +100,7 @@ typedef double(*function)(double); // Voor het gemak, scheelt schrijfwerk
 class Network
 {
 public:
-	Network(int input_neurons, int output_neurons);
+	Network();
 	~Network();
 
 	void SetActivationFunction(const function _activation_function);
@@ -108,7 +108,7 @@ public:
 	void SetActivationFunctionDerivative(const function _activation_function_derivative);
 	function GetActivationFunctionDerivative() const;
 
-	Network* AddHiddenLayer(int n_neurons);
+	Network* AddLayer(int n_neurons);
 
 	void init_biases();
 	void init_weights();
@@ -119,7 +119,6 @@ private:
 	function activation_function = nullptr; // Activatiefunctie van het netwerk.
 	function activation_function_derivative = nullptr; // Zijn afgeleide.
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
-	int inputNeurons, outputNeurons; // Aantal neuronen in de input- en outputlagen.
 
 	std::vector<ala::Vector<float>> activations; 
 	std::vector<ala::Vector<float>> biases;
@@ -128,45 +127,77 @@ private:
 
 void Network::init_activations()
 {
-	
+	std::cout << "[Network] Initializing activation vectors..\n";
+	for (size_t i = 0; i < layerNeurons.size(); i++)
+	{
+		Vector<float> zero(layerNeurons[i]);
+		activations.push_back(zero);
+	}
+	std::cout << "[Network] Successfully initialized activation vectors\n";
 }
 
 void Network::init_biases()
 {
-	
+	std::cout << "[Network] Initializing bias vectors..\n";
+	for (size_t i = 1; i < layerNeurons.size(); i++)
+	{
+		Vector<float> randomBiasVector = GetRandomVector<float>(-50, 50, layerNeurons[i]);
+		biases.push_back(randomBiasVector);
+	}
+	std::cout << "[Network] Successfully initialized bias vectors\n";
 }
 
 void Network::init_weights()
 {
-
+	std::cout << "[Network] Initializing weight matrices..\n";
+	for (size_t i = 1; i < layerNeurons.size(); i++)
+	{
+		Matrix<float> randomWeightMatrix =
+			GetRandomMatrix<float>(-1, 1, layerNeurons[i], layerNeurons[i - 1]);
+		weights.push_back(randomWeightMatrix);
+	}
+	std::cout << "[Network] Successfully initialized weight matrices\n";
 }
 
+// Update het netwerk; bepaal voor een gegeven inputvector de output, afhankelijk van de
+// weights en biases. 
 void Network::FeedForward(int row)
 {
-	Vector<float> a_0(tr_images.GetCols(), [&row](int i)->float
-		{
-			return (float) tr_images.at(row, i) / 255;
-		});
+	std::cout << "[Network] Feeding forward image at index " << row << "..\n";
+
+	Vector<float> a_0(tr_images.GetCols());
+	for (int i = 0; i < a_0.size(); i++)
+	{
+		a_0[i] = ((float)tr_images.at(row, i)) / 255;
+	}
 	activations[0] = a_0;
+
+	for (int n = 1; n < layerNeurons.size(); n++)
+	{
+		function f = GetActivationFunction();
+		Vector<float> a_n = (weights[n - 1] * activations[n - 1]) + biases[n - 1];
+		for (int i = 0; i < a_n.size(); i++)
+		{
+			a_n[i] = f(a_n[i]);
+		}
+		activations[n] = a_n;
+	}
+
+	std::cout << "[Network] Successfully fed forward image at index " << row << "\n";
 }
 
-// Voeg een verborgen laag toe aan het netwerk.
+// Voeg een laag toe aan het netwerk.
 // \param n_neurons Aantal neuronen van de verborgen laag.
-Network* Network::AddHiddenLayer(int n_neurons)
+Network* Network::AddLayer(int n_neurons)
 {
 	layerNeurons.push_back(n_neurons);
-	std::cout << "[Network] Adding hidden layer with " << n_neurons << " neurons..\n";
+	std::cout << "[Network] Adding layer with " << n_neurons << " neurons..\n";
 	return this;
 }
 
 // \param input_neurons Aantal neuronen in de inputlaag (aantal pixels in afbeelding)
 // \param output_neurons Aantal neuronen in de outputlaag (aantal verschillende te herkennen getallen)
-Network::Network(int input_neurons, int output_neurons)
-	: inputNeurons(input_neurons), outputNeurons(output_neurons)
-{
-	ala::Vector<float> a_0(inputNeurons, 0);
-	activations.push_back(a_0);
-}
+Network::Network(){}
 Network::~Network(){}
 
 // \param _activation_function De activatiefunctie van het neurale netwerk, e.g sigmoid, reLU, etc.
@@ -204,13 +235,20 @@ void init_network()
 
 	//================// Netwerkinitializatie start
 
-	network = new Network(tr_images.GetCols(), 10);
+	network = new Network();
 
 	network->SetActivationFunction(&sigmoid);
 	network->SetActivationFunctionDerivative(&sigmoidPrime);
-	network->AddHiddenLayer(16);
-	network->AddHiddenLayer(8);
 
+	network->AddLayer(tr_images.GetCols());
+	network->AddLayer(16);
+	network->AddLayer(16);
+	network->AddLayer(10);
+
+	network->init_activations();
+	network->init_biases();
+	network->init_weights();
+	
 	//================// Netwerkinitializatie stop
 
 	std::cout << "[Network] Successfully initialized neural network\n";
@@ -220,10 +258,17 @@ int main(int argc, char **argv)
 {
 	init_mnist(); // Laad de MNIST-dataset.
 	init_network(); // Laad het neurale netwerk. 
-
+	
 	// Laad een cijfer uit de dataset voor later gebruik. 
 	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
 	grid.init_data();
+	
+	// Test, verwijder later.
+	
+	for (size_t i = 0; i < tr_images.GetRows(); i++)
+	{
+		network->FeedForward(i);
+	}
 
 	// Gebruik de pijlentoetsen om naar andere cijfers in de dataset te gaan.
 	// links: index 1 minder
