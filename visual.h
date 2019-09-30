@@ -2,11 +2,13 @@
 #include <iostream>
 #include <SDL.h>
 #include <string>
-#include "ala.h"
+#include <Eigen/Dense>
 
 #define uint unsigned int
 
-using namespace ala;
+using namespace Eigen;
+
+typedef Matrix<uint, Dynamic, Dynamic> MatrixXui;
 
 namespace visual
 {
@@ -14,11 +16,13 @@ namespace visual
 	{
 	public:
 		Window(const char* title, int w, int h);
+		Window();
 		~Window();
 
 		void pollEvents();
 		void clear() const;
 		inline bool isClosed() const;
+		static enum window_state { loading_state, menu_state, explore_state, classification_state };
 	private:
 		bool init();
 
@@ -27,15 +31,11 @@ namespace visual
 		bool closed = false;
 
 		SDL_Window* window = nullptr;
-
-		int gridOffset_y = 0;
-		int gridOffset_x = 0;
-		float pixelScaleFactor = 1;
-		int pixelGridWidth = -1;
-
 	protected:
 		SDL_Renderer* renderer = nullptr;
 	};
+
+	Window::Window(){}
 
 	void Window::clear() const
 	{
@@ -80,40 +80,40 @@ namespace visual
 	{
 		//=================// Initializeer SDL
 
-		std::cout << "Initializing SDL..\n";
+		std::cout << "[Graphics] Initializing SDL..\n";
 		if (SDL_Init(SDL_INIT_VIDEO) != 0)
 		{
-			std::cerr << "SDL failed to initialize!\n";
+			std::cerr << "[Graphics] SDL failed to initialize!\n";
 		}
 		else
 		{
-			std::cout << "Successfully initialized SDL\n";
+			std::cout << "[Graphics] Successfully initialized SDL\n";
 		}
 
 		//=================// Initializeer het venster
 
-		std::cout << "Creating SDL window..\n";
+		std::cout << "[Graphics] Creating SDL window..\n";
 		window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED,
 			SDL_WINDOWPOS_CENTERED, w, h, 0);
 
 		if (window == nullptr)
 		{
-			std::cerr << "Failed to create SDL window\n";
+			std::cerr << "[Graphics] Failed to create SDL window\n";
 			return 0;
 		}
-		std::cout << "Successfully created SDL window\n";
+		std::cout << "[Graphics] Successfully created SDL window\n";
 
 		//=================// Initializeer de renderer
 
 		renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC);
 		if (renderer == nullptr)
 		{
-			std::cerr << "Failed to create SDL renderer\n";
+			std::cerr << "[Graphics] Failed to create SDL renderer\n";
 			return 0;
 		}
 		else
 		{
-			std::cout << "Successfully created SDL renderer\n";
+			std::cout << "[Graphics] Successfully created SDL renderer\n";
 		}
 
 		return 1;
@@ -127,13 +127,13 @@ namespace visual
 	private:
 		int width, height;
 		int x, y;
-		uint8_t r, g, b;
+		uint r, g, b;
 	};
 
 	class DataGrid : public Window
 	{
 	public:
-		DataGrid(const Window& window, Matrix<uint8_t>* data,
+		DataGrid(const Window& window, MatrixXf* data,
 			const int _pixelScaleFactor,
 			const int _gridOffset_x, const int _gridOffset_y);
 		~DataGrid();
@@ -142,7 +142,7 @@ namespace visual
 		void load_data(int row);
 		void pollEvents();
 	private:
-		Matrix<uint8_t>* data;
+		MatrixXf* data;
 		int pixelScaleFactor;
 		int gridOffset_x, gridOffset_y;
 		int dataMatrix_row;
@@ -165,7 +165,7 @@ namespace visual
 				switch (event.key.keysym.sym)
 				{
 				case SDLK_RIGHT:
-					dataMatrix_row < data->GetRows() ? dataMatrix_row++ : 0;
+					dataMatrix_row < (data->rows() - 1) ? dataMatrix_row++ : 0;
 					load_data(dataMatrix_row);
 					break;
 				case SDLK_LEFT:
@@ -173,7 +173,8 @@ namespace visual
 					load_data(dataMatrix_row);
 					break;
 				case SDLK_DOWN:
-					dataMatrix_row = ala::GetUniformRandom<int>(0, data->GetRows() - 1);
+					srand(time(NULL));
+					dataMatrix_row = rand() % (data->rows() - 1);
 					load_data(dataMatrix_row);
 					break;
 				}
@@ -183,12 +184,12 @@ namespace visual
 
 	void DataGrid::init_data()
 	{
-		int cols = data->GetCols();
+		int cols = data->cols();
 		for (int i = 0; i < cols; i++)
 		{
 			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
 			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
-			uint c = (uint)data->at(dataMatrix_row, i);
+			uint c = (uint)((*data)(dataMatrix_row, i) * 255);
 			Pixel* p = new Pixel(*this, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
 			pixels.push_back(p);
 		}
@@ -197,23 +198,23 @@ namespace visual
 	void DataGrid::load_data(int row)
 	{
 		dataMatrix_row = row;
-		int cols = data->GetCols();
+		int cols = data->cols();
 		for (int i = 0; i < cols; i++)
 		{
 			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
 			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
-			uint c = (uint)data->at(dataMatrix_row, i);
+			uint c = (uint)((*data)(dataMatrix_row, i) * 255);
 			pixels[i] = new Pixel(*this, pixelScaleFactor, pixelScaleFactor, pixelX, pixelY, c, c, c);
 		}
 	}
 
-	DataGrid::DataGrid(const Window& window, Matrix<uint8_t>* _data, const int _pixelScaleFactor,
+	DataGrid::DataGrid(const Window& window, MatrixXf* _data, const int _pixelScaleFactor,
 		const int _gridOffset_x, const int _gridOffset_y)
 		: Window(window), data(_data), pixelScaleFactor(_pixelScaleFactor),
 		gridOffset_x(_gridOffset_x), gridOffset_y(_gridOffset_y)
 	{
 		srand(time(NULL));
-		dataMatrix_row = ala::GetUniformRandom<int>(0, data->GetRows() - 1);
+		dataMatrix_row = rand() % (data->rows() - 1);
 	}
 
 	void DataGrid::draw() const
