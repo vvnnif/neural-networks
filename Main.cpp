@@ -5,9 +5,16 @@
 // Programmeergedeelte / deelvraag 4
 //=======================================================================
 
+// Een geoptimalizeerde library voor lineaire algebra; want 200000 matrixvermenigvuldigingen
+// is VEEL.
+#include <Eigen/Dense>
+
 // Mijn eigen geschreven library voor o.a lineaire algebra, 
 // documentatie is geschreven in het Engels omdat het een hobbyproject was.
-#include "ala.h"	
+// Dit project maakte *ooit* gebruik van de llinalg-functies hierin, nu gebruik ik het alleen nog maar
+// voor een aantal kleine dingen. 
+// Correctie: ik gebruik het niet meer.
+//#include "ala.h"	
 
 // Recht van het internet afgehaald, is wel zo handig.
 // Moest alsnog een paar aanpassingen maken om het te laten werken.
@@ -27,10 +34,13 @@
 
 #define uint unsigned int
 
-using namespace ala;
+using namespace Eigen;
 
-static Vector<uint> tr_labels, ts_labels; // Labels
-static Matrix<uint> tr_images, ts_images; // Afbeeldingen
+static std::vector<uint> tr_labels, ts_labels; // Labels
+static Eigen::MatrixXf tr_images, ts_images; // Afbeeldingen
+
+static int state;
+
 const int im_width = 28;
 
 const int win_height = 600, win_width = 800;
@@ -42,27 +52,45 @@ const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
 const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
 const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
-void print_mnist_image(Matrix<float> data, int im_size, int r);
+template<typename Derived>
+void print_mnist_image(MatrixBase<Derived>& data, int im_size, int r);
 void init_mnist();
 
 double sigmoid(double x);
 double sigmoidPrime(double x);
 void init_network();
 
+template<typename T>
+Matrix<T, Dynamic, 1> VectorToEigen(std::vector<T>& vec)
+{
+	return Map<Matrix<T, Dynamic, 1>, Unaligned>(vec.data(), vec.size());
+}
+
+MatrixXf ConvertToEigenMatrix(std::vector<std::vector<float>> data)
+{
+	MatrixXf eMatrix(data.size(), data[0].size());
+	for (int i = 0; i < data.size(); ++i)
+		eMatrix.row(i) = VectorXf::Map(&data[i][0], data[0].size());
+	return eMatrix;
+}
+
 // Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
 // matrices (afbeeldingen).
 void init_mnist()
 {
 	std::cout << "[MNIST] Parsing MNIST data..\n";
-
 	auto dataset = mnist::read_dataset();
-
-	tr_labels = dataset.training_labels;
-	tr_images = dataset.training_images;
-	ts_labels = dataset.test_labels;
-	ts_images = dataset.test_images;
-	
 	std::cout << "[MNIST] Successfully parsed MNIST data\n";
+
+	std::cout << "[MNIST] Converting images..\n";
+	ts_images = ConvertToEigenMatrix(dataset.test_images);
+	tr_images = ConvertToEigenMatrix(dataset.training_images);
+	std::cout << "[MNIST] Successfully converted images\n";
+
+	std::cout << "[MNIST] Converting labels..\n";
+	ts_labels = dataset.test_labels;
+	tr_labels = dataset.training_labels;
+	std::cout << "[MNIST] Successfully converted labels\n";
 }
 
 // Print een afbeelding uit de mnist-dataset in de console, 
@@ -70,13 +98,14 @@ void init_mnist()
 // \param r De hoeveelste afbeelding die gelezen moet worden.
 // \param im_size De breedte/lengte van de afbeeldingen.
 // \param data De afbeeldingsmatrix om uit te lezen.
-void print_mnist_image(Matrix<uint> data, int im_size, int r)
+template<typename Derived>
+[[deprecated]] void print_mnist_image(MatrixBase<Derived>& data, int im_size, int r)
 {
 	int s = im_size * im_size;
 	for (int i = 0; i < s; i++)
 	{
 		if (i % im_size == 0) std::cout << "\n";
-		std::cout << (uint)data.at(r, i) << " ";
+		std::cout << (uint)data(r, i) << " ";
 	}
 }
 
@@ -115,75 +144,57 @@ public:
 	void init_activations();
 
 	void FeedForward(int row);
+	void Train(int num_images, int epochs);
+
+	std::vector<VectorXf> activations;
+	std::vector<VectorXf> biases;
+	std::vector<MatrixXf> weights;
+	std::vector<VectorXf> expectedResults;
 private:
 	function activation_function = nullptr; // Activatiefunctie van het netwerk.
 	function activation_function_derivative = nullptr; // Zijn afgeleide.
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
-
-	std::vector<ala::Vector<float>> activations; 
-	std::vector<ala::Vector<float>> biases;
-	std::vector<ala::Matrix<float>> weights;
+	float MSE = 0;
 };
 
 void Network::init_activations()
 {
-	std::cout << "[Network] Initializing activation vectors..\n";
+	std::cout << "[Network|Init] Initializing activation vectors..\n";
 	for (size_t i = 0; i < layerNeurons.size(); i++)
 	{
-		Vector<float> zero(layerNeurons[i]);
+		VectorXf zero = VectorXf::Zero(layerNeurons[i]); 
 		activations.push_back(zero);
 	}
-	std::cout << "[Network] Successfully initialized activation vectors\n";
+
+	for (int i = 0; i < 10; i++)
+	{
+		VectorXf expected_i = VectorXf::Zero(10);
+		expected_i(i) = 1;
+		expectedResults.push_back(expected_i);
+	}
+	std::cout << "[Network|Init] Successfully initialized activation vectors\n";
 }
 
 void Network::init_biases()
 {
-	std::cout << "[Network] Initializing bias vectors..\n";
+	std::cout << "[Network|Init] Initializing bias vectors..\n";
 	for (size_t i = 1; i < layerNeurons.size(); i++)
 	{
-		Vector<float> randomBiasVector = GetRandomVector<float>(-50, 50, layerNeurons[i]);
+		VectorXf randomBiasVector = 50 * VectorXf::Random(layerNeurons[i]);
 		biases.push_back(randomBiasVector);
 	}
-	std::cout << "[Network] Successfully initialized bias vectors\n";
+	std::cout << "[Network|Init] Successfully initialized bias vectors\n";
 }
 
 void Network::init_weights()
 {
-	std::cout << "[Network] Initializing weight matrices..\n";
+	std::cout << "[Network|Init] Initializing weight matrices..\n";
 	for (size_t i = 1; i < layerNeurons.size(); i++)
 	{
-		Matrix<float> randomWeightMatrix =
-			GetRandomMatrix<float>(-1, 1, layerNeurons[i], layerNeurons[i - 1]);
+		MatrixXf randomWeightMatrix = MatrixXf::Random(layerNeurons[i], layerNeurons[i - 1]);
 		weights.push_back(randomWeightMatrix);
 	}
-	std::cout << "[Network] Successfully initialized weight matrices\n";
-}
-
-// Update het netwerk; bepaal voor een gegeven inputvector de output, afhankelijk van de
-// weights en biases. 
-void Network::FeedForward(int row)
-{
-	std::cout << "[Network] Feeding forward image at index " << row << "..\n";
-
-	Vector<float> a_0(tr_images.GetCols());
-	for (int i = 0; i < a_0.size(); i++)
-	{
-		a_0[i] = ((float)tr_images.at(row, i)) / 255;
-	}
-	activations[0] = a_0;
-
-	for (int n = 1; n < layerNeurons.size(); n++)
-	{
-		function f = GetActivationFunction();
-		Vector<float> a_n = (weights[n - 1] * activations[n - 1]) + biases[n - 1];
-		for (int i = 0; i < a_n.size(); i++)
-		{
-			a_n[i] = f(a_n[i]);
-		}
-		activations[n] = a_n;
-	}
-
-	std::cout << "[Network] Successfully fed forward image at index " << row << "\n";
+	std::cout << "[Network|Init] Successfully initialized weight matrices\n";
 }
 
 // Voeg een laag toe aan het netwerk.
@@ -191,7 +202,7 @@ void Network::FeedForward(int row)
 Network* Network::AddLayer(int n_neurons)
 {
 	layerNeurons.push_back(n_neurons);
-	std::cout << "[Network] Adding layer with " << n_neurons << " neurons..\n";
+	std::cout << "[Network|Init] Adding layer with " << n_neurons << " neurons..\n";
 	return this;
 }
 
@@ -203,7 +214,7 @@ Network::~Network(){}
 // \param _activation_function De activatiefunctie van het neurale netwerk, e.g sigmoid, reLU, etc.
 void Network::SetActivationFunction(const function _activation_function)
 {
-	std::cout << "[Network] Setting activation function..\n";
+	std::cout << "[Network|Init] Setting activation function..\n";
 	activation_function = _activation_function;
 }
 
@@ -215,7 +226,7 @@ function Network::GetActivationFunction() const
 // \param _activation_function_derivative De afgeleide van de activatiefunctie.
 void Network::SetActivationFunctionDerivative(const function _activation_function_derivative)
 {
-	std::cout << "[Network] Setting activation function derivative..\n";
+	std::cout << "[Network|Init] Setting activation function derivative..\n";
 	activation_function_derivative = _activation_function_derivative;
 }
 
@@ -226,12 +237,47 @@ function Network::GetActivationFunctionDerivative() const
 
 static Network* network; // Het neurale netwerk die we gaan gebruiken.
 
+// Update het netwerk; bepaal voor een gegeven inputvector de output, afhankelijk van de
+// weights en biases. 
+void Network::FeedForward(int row)
+{
+	for (int n = 1; n < layerNeurons.size(); n++)
+	{
+		activations[n] = weights[n - 1] * activations[n - 1] + biases[n - 1];
+		for (int i = 1; i < layerNeurons[n]; i++) 
+		{
+			activations[n](i) = activation_function(activations[n](i));
+		}
+	}
+	VectorXf toSquare = expectedResults[tr_labels[row]] - activations[layerNeurons.size() - 1];
+	for (int i = 0; i < toSquare.rows(); i++)
+	{
+		MSE += toSquare[i] * toSquare[i];
+	}
+}
+
+void Network::Train(int num_images, int epochs)
+{
+	std::cout << "[Network] Network has started training\n";
+	for (int i = 0; i < epochs; i++)
+	{
+		for (int j = 0; j < num_images; j++)
+			FeedForward(j);
+
+		MSE /= num_images;
+		std::cout << "[Network|Training] Epochs trained: " << i + 1 << "\n";
+		std::cout << "[Network|Training] Mean squared error: " << MSE << "\n";
+		MSE = 0;
+	}
+	std::cout << "[Network] Network has successfully been trained\n";
+}
+
 // Laad het neurale netwerk; hierin worden alle parameters van het netwerk
 // vastgesteld. Hoeveelheid lagen, hoeveelheid neuronen in elke laag,
 // activatiefunctie, et cetera.
 void init_network()
 {
-	std::cout << "[Network] Initializing neural network..\n";
+	std::cout << "[Network|Init] Initializing neural network..\n";
 
 	//================// Netwerkinitializatie start
 
@@ -240,7 +286,7 @@ void init_network()
 	network->SetActivationFunction(&sigmoid);
 	network->SetActivationFunctionDerivative(&sigmoidPrime);
 
-	network->AddLayer(tr_images.GetCols());
+	network->AddLayer(784);
 	network->AddLayer(16);
 	network->AddLayer(16);
 	network->AddLayer(10);
@@ -248,40 +294,36 @@ void init_network()
 	network->init_activations();
 	network->init_biases();
 	network->init_weights();
-	
+
 	//================// Netwerkinitializatie stop
 
-	std::cout << "[Network] Successfully initialized neural network\n";
+	std::cout << "[Network|Init] Successfully initialized neural network\n";
 }
 
 int main(int argc, char **argv)
 {
-	init_mnist(); // Laad de MNIST-dataset.
-	init_network(); // Laad het neurale netwerk. 
-	
-	// Laad een cijfer uit de dataset voor later gebruik. 
+	state = window.loading_state;
 	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
-	grid.init_data();
 	
-	// Test, verwijder later.
-	
-	for (size_t i = 0; i < tr_images.GetRows(); i++)
-	{
-		network->FeedForward(i);
-	}
-
-	// Gebruik de pijlentoetsen om naar andere cijfers in de dataset te gaan.
-	// links: index 1 minder
-	// rechts: index 1 meer
-	// beneden: willekeurige index
 	while (!window.isClosed())
 	{
-		grid.draw(); // Teken het cijfer op het scherm.
-		grid.pollEvents();
+		if (state == window.explore_state)
+		{
+			grid.draw();
+			grid.pollEvents();
+		}
 
 		window.pollEvents();
 		window.clear();
-	}
 
+		if (state == window.loading_state)
+		{
+			init_mnist();
+			init_network();
+			grid.init_data();
+			network->Train(10000, 1000);
+			state = window.explore_state;
+		}
+	}
 	return 0;
 }
