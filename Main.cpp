@@ -139,16 +139,16 @@ public:
 
 	Network* AddLayer(int n_neurons);
 
-	void init_biases();
-	void init_weights();
-	void init_activations();
+	void finalize_init();
 
 	void FeedForward(int row);
 	void Train(int num_images, int epochs);
 
-	std::vector<VectorXf> activations;
-	std::vector<VectorXf> biases;
-	std::vector<MatrixXf> weights;
+	std::vector<MatrixXf> w;
+	std::vector<VectorXf> a;
+	std::vector<VectorXf> b;
+	std::vector<VectorXf> z;
+	std::vector<VectorXf> deltas;
 	std::vector<VectorXf> expectedResults;
 private:
 	function activation_function = nullptr; // Activatiefunctie van het netwerk.
@@ -157,13 +157,26 @@ private:
 	float MSE = 0;
 };
 
-void Network::init_activations()
+void Network::finalize_init()
 {
-	std::cout << "[Network|Init] Initializing activation vectors..\n";
+	std::cout << "[Network|Init] Initializing network values..\n";
 	for (size_t i = 0; i < layerNeurons.size(); i++)
 	{
 		VectorXf zero = VectorXf::Zero(layerNeurons[i]); 
-		activations.push_back(zero);
+		a.push_back(zero);
+
+		if (i > 0)
+		{
+			VectorXf randomBiasVector = 50 * VectorXf::Random(layerNeurons[i]);
+			b.push_back(randomBiasVector);
+
+			MatrixXf randomWeightMatrix = MatrixXf::Random(layerNeurons[i], layerNeurons[i - 1]);
+			w.push_back(randomWeightMatrix);
+		}
+		if (i > 0 && i < layerNeurons.size() - 1)
+		{
+			deltas.push_back(zero);
+		}
 	}
 
 	for (int i = 0; i < 10; i++)
@@ -172,29 +185,7 @@ void Network::init_activations()
 		expected_i(i) = 1;
 		expectedResults.push_back(expected_i);
 	}
-	std::cout << "[Network|Init] Successfully initialized activation vectors\n";
-}
-
-void Network::init_biases()
-{
-	std::cout << "[Network|Init] Initializing bias vectors..\n";
-	for (size_t i = 1; i < layerNeurons.size(); i++)
-	{
-		VectorXf randomBiasVector = 50 * VectorXf::Random(layerNeurons[i]);
-		biases.push_back(randomBiasVector);
-	}
-	std::cout << "[Network|Init] Successfully initialized bias vectors\n";
-}
-
-void Network::init_weights()
-{
-	std::cout << "[Network|Init] Initializing weight matrices..\n";
-	for (size_t i = 1; i < layerNeurons.size(); i++)
-	{
-		MatrixXf randomWeightMatrix = MatrixXf::Random(layerNeurons[i], layerNeurons[i - 1]);
-		weights.push_back(randomWeightMatrix);
-	}
-	std::cout << "[Network|Init] Successfully initialized weight matrices\n";
+	std::cout << "[Network|Init] Successfully initialized network values\n";
 }
 
 // Voeg een laag toe aan het netwerk.
@@ -243,16 +234,35 @@ void Network::FeedForward(int row)
 {
 	for (int n = 1; n < layerNeurons.size(); n++)
 	{
-		activations[n] = weights[n - 1] * activations[n - 1] + biases[n - 1];
+		a[n] = w[n - 1] * a[n - 1] + b[n - 1]; // Feed-forward voor elke laag.
 		for (int i = 1; i < layerNeurons[n]; i++) 
 		{
-			activations[n](i) = activation_function(activations[n](i));
+			z[i - 1] = (a[n]); // Bepaal de 'onaangetastte' tussenwaarden z van elke laag.
+			a[n](i) = activation_function(a[n](i)); // Bepaal de activaties met behulp van de activatiefunctie.
 		}
 	}
-	VectorXf toSquare = expectedResults[tr_labels[row]] - activations[layerNeurons.size() - 1];
+
+	// Backpropagation.
+	//
+	// Stap 1: Bereken de delta-waarden van de een-na-laatste laag.
+	// Deze delta is gelijk aan de partiële afgeleide van de kostenfunctie met respect tot de
+	// tussenwaarden van de een-na-laatste laag.
+	// delta[i] = #een vector met als componenten de partiële afgeleiden van de kostenfunctie
+	// met respect tot de activatie in de een-na-laatste laag# o #een vector met als componenten
+	// de afgeleide van de activatiefunctie geëvalueerd op de tussenwaarden van de een-na-laatste-laag#
+	for (int i = layerNeurons.size() - 2; i > 0; i--)
+	{
+		for (int j = 0; j < layerNeurons[i]; j++)
+		{
+			deltas[i](j) = (expectedResults[i](j) - a[i](j)) * activation_function_derivative(z[i](j));
+		}
+	}
+
+	// Bereken de error van deze afbeeldingsvector, tel het op bij de mean-squared error.
+	VectorXf toSquare = expectedResults[tr_labels[row]] - a[layerNeurons.size() - 1];
 	for (int i = 0; i < toSquare.rows(); i++)
 	{
-		MSE += toSquare[i] * toSquare[i];
+		MSE += (toSquare[i] * toSquare[i]) / 2;
 	}
 }
 
@@ -262,8 +272,9 @@ void Network::Train(int num_images, int epochs)
 	for (int i = 0; i < epochs; i++)
 	{
 		for (int j = 0; j < num_images; j++)
+		{
 			FeedForward(j);
-
+		}
 		MSE /= num_images;
 		std::cout << "[Network|Training] Epochs trained: " << i + 1 << "\n";
 		std::cout << "[Network|Training] Mean squared error: " << MSE << "\n";
@@ -291,9 +302,7 @@ void init_network()
 	network->AddLayer(16);
 	network->AddLayer(10);
 
-	network->init_activations();
-	network->init_biases();
-	network->init_weights();
+	network->finalize_init();
 
 	//================// Netwerkinitializatie stop
 
@@ -321,7 +330,9 @@ int main(int argc, char **argv)
 			init_mnist();
 			init_network();
 			grid.init_data();
-			network->Train(10000, 1000);
+
+			network->Train(10000, 2);
+
 			state = window.explore_state;
 		}
 	}
