@@ -52,12 +52,11 @@ const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
 const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
 const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
-template<typename Derived>
-void print_mnist_image(MatrixBase<Derived>& data, int im_size, int r);
+void print_mnist_image(VectorXf& data);
 void init_mnist();
 
 double sigmoid(double x);
-double sigmoidPrime(double x);
+double sigmoidDerivative(double x);
 void init_network();
 
 template<typename T>
@@ -98,15 +97,14 @@ void init_mnist()
 // \param r De hoeveelste afbeelding die gelezen moet worden.
 // \param im_size De breedte/lengte van de afbeeldingen.
 // \param data De afbeeldingsmatrix om uit te lezen.
-template<typename Derived>
-[[deprecated]] void print_mnist_image(MatrixBase<Derived>& data, int im_size, int r)
+void print_mnist_image(VectorXf& data)
 {
-	int s = im_size * im_size;
-	for (int i = 0; i < s; i++)
+	for (int i = 0; i < data.rows(); i++)
 	{
-		if (i % im_size == 0) std::cout << "\n";
-		std::cout << (uint)data(r, i) << " ";
+		if (i % 28 == 0) std::cout << "\n";
+		std::cout << (uint)(data(i) * 255) << " ";
 	}
+	std::cout << "\n";
 }
 
 // De sigmoid-activatiefunctie, beeldt R af op [0, 1].
@@ -118,7 +116,7 @@ double sigmoid(double x)
 }
 
 // De afgeleide van de sigmoid-functie.
-double sigmoidPrime(double x)
+double sigmoidDerivative(double x)
 {
 	return sigmoid(x) * (1 - sigmoid(x));
 }
@@ -136,20 +134,19 @@ public:
 	function GetActivationFunction() const;
 	void SetActivationFunctionDerivative(const function _activation_function_derivative);
 	function GetActivationFunctionDerivative() const;
+	int Classify(MatrixXf& data, int x);
 
 	Network* AddLayer(int n_neurons);
 
 	void finalize_init();
 
-	void FeedForward(int row);
-	void Train(int num_images, int epochs);
+	void Train(int batch_size, int epochs, float learning_rate);
 
 	std::vector<MatrixXf> w;
-	std::vector<VectorXf> a;
-	std::vector<VectorXf> b;
-	std::vector<VectorXf> z;
-	std::vector<VectorXf> deltas;
-	std::vector<VectorXf> expectedResults;
+	std::vector<VectorXf> a, b, z, deltas, expectedResults;
+
+	std::vector<VectorXf> gradient_b;
+	std::vector<MatrixXf> gradient_w;
 private:
 	function activation_function = nullptr; // Activatiefunctie van het netwerk.
 	function activation_function_derivative = nullptr; // Zijn afgeleide.
@@ -164,18 +161,20 @@ void Network::finalize_init()
 	{
 		VectorXf zero = VectorXf::Zero(layerNeurons[i]); 
 		a.push_back(zero);
+		z.push_back(zero);
+		deltas.push_back(zero);
 
 		if (i > 0)
 		{
-			VectorXf randomBiasVector = 50 * VectorXf::Random(layerNeurons[i]);
+			srand(time(NULL));
+			VectorXf randomBiasVector = VectorXf::Random(layerNeurons[i]);
 			b.push_back(randomBiasVector);
 
 			MatrixXf randomWeightMatrix = MatrixXf::Random(layerNeurons[i], layerNeurons[i - 1]);
 			w.push_back(randomWeightMatrix);
-		}
-		if (i > 0 && i < layerNeurons.size() - 1)
-		{
-			deltas.push_back(zero);
+
+			gradient_b.push_back(zero);
+			gradient_w.push_back(MatrixXf::Zero(layerNeurons[i], layerNeurons[i - 1]));
 		}
 	}
 
@@ -228,55 +227,130 @@ function Network::GetActivationFunctionDerivative() const
 
 static Network* network; // Het neurale netwerk die we gaan gebruiken.
 
-// Update het netwerk; bepaal voor een gegeven inputvector de output, afhankelijk van de
-// weights en biases. 
-void Network::FeedForward(int row)
+int Network::Classify(MatrixXf& data, int x)
 {
-	for (int n = 1; n < layerNeurons.size(); n++)
+	// Feed-forward
+	int layers = layerNeurons.size();
+	a[0] = data.row(x);
+	for (int l = 1; l < layers; l++)
 	{
-		a[n] = w[n - 1] * a[n - 1] + b[n - 1]; // Feed-forward voor elke laag.
-		for (int i = 1; i < layerNeurons[n]; i++) 
+		a[l] = w[l - 1] * a[l - 1] + b[l - 1]; // Feed-forward voor elke laag.
+		for (int i = 0; i < layerNeurons[l]; i++)
 		{
-			z[i - 1] = (a[n]); // Bepaal de 'onaangetastte' tussenwaarden z van elke laag.
-			a[n](i) = activation_function(a[n](i)); // Bepaal de activaties met behulp van de activatiefunctie.
+			a[l](i) = activation_function(a[l](i)); // Bepaal de activaties met behulp van de activatiefunctie.
 		}
 	}
-
-	// Backpropagation.
-	//
-	// Stap 1: Bereken de delta-waarden van de een-na-laatste laag.
-	// Deze delta is gelijk aan de partiële afgeleide van de kostenfunctie met respect tot de
-	// tussenwaarden van de een-na-laatste laag.
-	// delta[i] = #een vector met als componenten de partiële afgeleiden van de kostenfunctie
-	// met respect tot de activatie in de een-na-laatste laag# o #een vector met als componenten
-	// de afgeleide van de activatiefunctie geëvalueerd op de tussenwaarden van de een-na-laatste-laag#
-	for (int i = layerNeurons.size() - 2; i > 0; i--)
+	int max_index = 0;
+	float max = 0;
+	for (int i = 0; i < a[layers - 1].size(); i++)
 	{
-		for (int j = 0; j < layerNeurons[i]; j++)
-		{
-			deltas[i](j) = (expectedResults[i](j) - a[i](j)) * activation_function_derivative(z[i](j));
+		if (a[layers - 1](i) > max) {
+			max = a[layers - 1](i);
+			max_index = i;
 		}
 	}
-
-	// Bereken de error van deze afbeeldingsvector, tel het op bij de mean-squared error.
-	VectorXf toSquare = expectedResults[tr_labels[row]] - a[layerNeurons.size() - 1];
-	for (int i = 0; i < toSquare.rows(); i++)
-	{
-		MSE += (toSquare[i] * toSquare[i]) / 2;
-	}
+	print_mnist_image(a[0]);
+	std::cout << "The network classifies this " << ts_labels[x] <<
+		" as: \n" << a[layers - 1] << std::endl;
+	std::cout << "(" << max_index << ")" << "\n";
+	return max_index;
 }
 
-void Network::Train(int num_images, int epochs)
+void Network::Train(int batch_size, int epochs, float learning_rate)
 {
 	std::cout << "[Network] Network has started training\n";
-	for (int i = 0; i < epochs; i++)
+	int layers = layerNeurons.size();
+	for (int epoch = 0; epoch < epochs; epoch++)
 	{
-		for (int j = 0; j < num_images; j++)
+		// Genereer een minibatch voor SGD.
+		std::vector<int> batch_indices;
+		srand(time(NULL));
+		for (int i = 0; i < batch_size; i++)
 		{
-			FeedForward(j);
+			batch_indices.push_back(rand() % tr_images.rows());
 		}
-		MSE /= num_images;
-		std::cout << "[Network|Training] Epochs trained: " << i + 1 << "\n";
+		for (int x : batch_indices)
+		{
+			// Feed-forward
+			a[0] = tr_images.row(x);
+			for (int l = 1; l < layers; l++)
+			{
+				a[l] = w[l - 1] * a[l - 1] + b[l - 1]; // Feed-forward voor elke laag.
+				z[l] = a[l]; // Bepaal de 'onaangetastte' tussenwaarden z van elke laag.
+				for (int i = 0; i < layerNeurons[l]; i++)
+				{
+					a[l](i) = activation_function(a[l](i)); // Bepaal de activaties met behulp van de activatiefunctie.
+				}
+			}
+
+			// Backpropagation
+			for (int l = layers - 1; l > 0; l--)
+			{
+				// z_l
+				VectorXf derivatives(layerNeurons[l]);
+				for (int i = 0; i < layerNeurons[l]; i++)
+				{
+					derivatives(i) = activation_function_derivative(z[l](i));
+					// delta_L
+					if (l == layers - 1)
+					{
+						deltas[l](i) = (a[l](i) - expectedResults[tr_labels[x]](i)) * derivatives(i);
+						gradient_b[l - 1](i) = deltas[l](i); // Update de gradiënt alvast.
+					}
+				}
+				// delta_l
+				if (l < layers - 1)
+				{
+					deltas[l] = (w[l].transpose() * deltas[l + 1]).cwiseProduct(derivatives);
+					gradient_b[l - 1] += deltas[l]; // Update de gradiënt alvast.
+					for (int i = 0; i < w[l - 1].rows(); i++)
+					{
+						for (int j = 0; j < w[l - 1].cols(); j++)
+						{
+							gradient_w[l - 1](i, j) += a[l - 1](j) * deltas[l](i); // Doe dat ook voor de weights.
+						}
+					}
+				}
+			}
+
+			// Bereken de error van deze afbeeldingsvector, tel het op bij de mean-squared error.
+			VectorXf toSquare = a[layers - 1] - expectedResults[tr_labels[x]];
+			for (int i = 0; i < toSquare.rows(); i++)
+			{
+				MSE += (toSquare[i] * toSquare[i]) / 2;
+			}
+			if (epoch % 100 == 0)
+			{
+				print_mnist_image(a[0]);
+				std::cout << "The network classifies this " << tr_labels[x] <<
+					 " as: \n" << a[layers - 1] << std::endl;
+			}
+		}
+
+		for (MatrixXf mat : gradient_w)
+		{
+			mat /= batch_size;
+		}
+		for (VectorXf vec : gradient_b)
+		{
+			vec /= batch_size;
+		}
+
+		// Update de waarden met de gradiënt
+		for (int l = 1; l < layers; l++)
+		{
+			for (int i = 0; i < layerNeurons[l]; i++)
+			{
+				b[l - 1](i) -= learning_rate * gradient_b[l - 1](i);
+				for (int j = 0; j < layerNeurons[l - 1]; j++)
+				{
+					w[l - 1](i, j) -= learning_rate * gradient_w[l - 1](i, j);
+				}
+			}
+		}
+
+		MSE /= batch_size;
+		std::cout << "[Network|Training] Epochs trained: " << epoch + 1 << "\n";
 		std::cout << "[Network|Training] Mean squared error: " << MSE << "\n";
 		MSE = 0;
 	}
@@ -295,11 +369,11 @@ void init_network()
 	network = new Network();
 
 	network->SetActivationFunction(&sigmoid);
-	network->SetActivationFunctionDerivative(&sigmoidPrime);
+	network->SetActivationFunctionDerivative(&sigmoidDerivative);
 
 	network->AddLayer(784);
-	network->AddLayer(16);
-	network->AddLayer(16);
+	network->AddLayer(8);
+	network->AddLayer(8);
 	network->AddLayer(10);
 
 	network->finalize_init();
@@ -313,12 +387,15 @@ int main(int argc, char **argv)
 {
 	state = window.loading_state;
 	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
-	
+
 	while (!window.isClosed())
 	{
 		if (state == window.explore_state)
 		{
+			// TODO: doe dit op een competente manier
 			grid.draw();
+			//int n = network->Classify(ts_images, grid.dataMatrix_row);
+			//std::cout << "Het netwerk denkt dat dit een " << n << " is.\n";
 			grid.pollEvents();
 		}
 
@@ -330,8 +407,12 @@ int main(int argc, char **argv)
 			init_mnist();
 			init_network();
 			grid.init_data();
-
-			network->Train(10000, 2);
+			
+			for (int i = 0; i < 10; i++)
+			{
+				network->Classify(ts_images, i);
+			}
+			//network->Train(10, 1, 0.04);
 
 			state = window.explore_state;
 		}
