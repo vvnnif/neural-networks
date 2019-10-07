@@ -168,12 +168,12 @@ private:
 
 void Network::reset_gradients()
 {
-	for (VectorXf vec : gradient_b)
+	for (VectorXf& vec : gradient_b)
 	{
-		VectorXf zero = VectorXf::Zero(vec.cols());
+		VectorXf zero = VectorXf::Zero(vec.rows());
 		vec = zero;
 	}
-	for (MatrixXf mat : gradient_w)
+	for (MatrixXf& mat : gradient_w)
 	{
 		MatrixXf zero = MatrixXf::Zero(mat.rows(), mat.cols());
 		mat = zero;
@@ -191,7 +191,7 @@ void Network::finalize_init()
 
 		if (i > 0)
 		{
-			//VectorXf bias = VectorXf::Constant(layerNeurons[i], 0);
+			//VectorXf bias = VectorXf::Constant(layerNeurons[i], 0.1);
 			b.push_back(zero);
 			deltas.push_back(zero);
 
@@ -291,15 +291,17 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 {
 	std::cout << "[Network] Network has started training\n";
 	int layers = layerNeurons.size();
+	srand(time(NULL));
 	for (int epoch = 0; epoch < epochs; epoch++)
 	{
 		// Genereer een minibatch voor SGD.
 		std::vector<int> batch_indices;
-		srand(time(NULL));
 		for (int i = 0; i < batch_size; i++)
 		{
 			batch_indices.push_back(rand() % tr_images.rows());
 		}
+
+		// Doe Stochastic Gradient Descent
 		for (int x : batch_indices)
 		{
 			// Feed-forward
@@ -307,37 +309,31 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 			a[0] = tr_images.row(x);
 			for (int l = 1; l < layers; l++)
 			{
-				z[l] = (w[l - 1] * a[l - 1]) + b[l - 1]; // Feed-forward voor elke laag.
+				z[l] = (w[l - 1] * a[l - 1]) + b[l - 1];
 				for (int i = 0; i < layerNeurons[l]; i++)
 				{
-					a[l](i) = activation_function(z[l](i)); // Bepaal de activaties met behulp van de activatiefunctie.
+					a[l](i) = activation_function(z[l](i));
 				}
-				//if(epoch % 100 == 0) std::cout << "a[" << l << "]: " << a[l] << "\n";
-				//if (epoch % 100 == 0) std::cout << "z[" << l << "]: " << z[l] << "\n";
 			}
 
 			// Backpropagation
-			for (int l = layers - 1; l > 0; --l)
+			for (int l = layers - 1; l > 0; l--)
 			{
-				// z_l
 				VectorXf derivatives(layerNeurons[l]);
 				for (int i = 0; i < layerNeurons[l]; i++)
 				{
 					derivatives(i) = activation_function_derivative(z[l](i));
 				}
-				//std::cout << "Derivatives at layer " << l << ":\n" << derivatives << "\n\n";
 				if (l == layers - 1)
 				{
 					deltas[l - 1] = (a[l] - expectedResults[tr_labels[x]]).cwiseProduct(derivatives);
-					//std::cout << "Reported error when attempting to recognise a "
-						//<< tr_labels[x] << ":\n" << a[3] - expectedResults[tr_labels[x]] << "\n\n";
 				}
 				else
 				{
 					deltas[l - 1] = (w[l].transpose() * deltas[l]).cwiseProduct(derivatives);
 				}
 
-				gradient_b[l - 1] += deltas[l - 1]; // Update de gradiënten met respect tot b en w.
+				gradient_b[l - 1] += deltas[l - 1];
 				for (int i = 0; i < w[l - 1].rows(); i++)
 				{
 					for (int j = 0; j < w[l - 1].cols(); j++)
@@ -349,12 +345,9 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 
 			// Bereken de error van deze afbeeldingsvector, tel het op bij de mean-squared error.
 			VectorXf toSquare = a[layers - 1] - expectedResults[tr_labels[x]];
- 			for (int i = 0; i < toSquare.rows(); i++)
-			{
-				MSE += (toSquare[i] * toSquare[i]);
-			}
+			MSE += toSquare.dot(toSquare);
 		
-			if (epoch % 100 == 0)
+			if (epoch % 500 == 0)
 			{
 				print_mnist_image(a[0]);
 				std::cout << "The network classifies this " << tr_labels[x] <<
@@ -362,26 +355,32 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 			}
 		}
 
+		if (epoch % 100 == 0)
+		{
+			for (VectorXf vec : gradient_b) std::cout << vec << "\n\n";
+			for (MatrixXf mat : gradient_w) std::cout << mat << "\n\n";
+		}
+
 		// Update de waarden met de gradiënt
 		for (int l = 1; l < layers; l++)
 		{
 			for (int i = 0; i < layerNeurons[l]; i++)
 			{
-				b[l - 1](i) -= learning_rate * gradient_b[l - 1](i) / batch_size;
+				b[l - 1](i) -= (learning_rate / batch_size) * gradient_b[l - 1](i);
 				for (int j = 0; j < layerNeurons[l - 1]; j++)
 				{
-					w[l - 1](i, j) -= learning_rate * gradient_w[l - 1](i, j) / batch_size;
+					w[l - 1](i, j) -= (learning_rate / batch_size) * gradient_w[l - 1](i, j);
 				}
 			}
 		}
 
-		MSE /= (batch_size * 2);
+		MSE /= batch_size;
 		std::cout << "[Network|Training] Epochs trained: " << epoch + 1 << "\n";
 		std::cout << "[Network|Training] Mean squared error: " << MSE << "\n";
 		MSE = 0;
 
-		// Check progress
-		if (epoch % 100 == 0)
+		// Check progressie
+		if (epoch % 500 == 0)
 		{
 			int size = ts_images.rows();
 			float recognised = 0;
@@ -407,10 +406,7 @@ void init_network()
 	network->SetActivationFunction(&sigmoid);
 	network->SetActivationFunctionDerivative(&sigmoidDerivative);
 
-	network->AddLayer(784);
-	network->AddLayer(10);
-	network->AddLayer(10);
-	network->AddLayer(10);
+	network->AddLayer(784)->AddLayer(8)->AddLayer(8)->AddLayer(10);
 
 	network->finalize_init();
 
@@ -444,7 +440,7 @@ int main(int argc, char **argv)
 			init_network();
 			grid.init_data();
 			
-			network->Train(10, 15000, 0.01);
+			network->Train(20, 15000, 5);
 
 			state = window.explore_state;
 		}
