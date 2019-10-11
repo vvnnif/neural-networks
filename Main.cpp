@@ -168,7 +168,7 @@ private:
 	function activation_function_derivative = nullptr; // Zijn afgeleide.
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 	float MSE = 0;
-	bool debug = 0, analysis = 0;
+	bool debug = 0, analysis = 0, stop_training = 0;
 };
 
 Network* Network::SetDebugMode(bool b)
@@ -271,10 +271,10 @@ void Network::FeedForward(MatrixXf& data, int x)
 	a[0] = data.row(x);
 	for (int l = 1; l < layers; l++)
 	{
-		a[l] = w[l - 1] * a[l - 1] + b[l - 1]; // Feed-forward voor elke laag.
+		z[l] = w[l - 1] * a[l - 1] + b[l - 1]; // Feed-forward voor elke laag.
 		for (int i = 0; i < layerNeurons[l]; i++)
 		{
-			a[l](i) = activation_function(a[l](i)); // Bepaal de activaties met behulp van de activatiefunctie.
+			a[l](i) = activation_function(z[l](i)); // Bepaal de activaties met behulp van de activatiefunctie.
 		}
 	}
 }
@@ -301,7 +301,7 @@ int Network::Classify(MatrixXf& data, int x)
 	return max_index;
 }
 
-void Network::Train(int batch_size, int epochs, float learning_rate)
+void Network::Train(int batch_size, int num_epochs, float learning_rate)
 {
 	std::cout << "[Network] Network has started training\n";
 	int layers = layerNeurons.size();
@@ -309,10 +309,9 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 	srand(time(NULL));
 	Eigen::PermutationMatrix<Dynamic, Dynamic> p(tr_images.rows());
 	p.setIdentity();
-	for (int epoch = 0; epoch < epochs; epoch++)
+	int epoch = 0;
+	while(epoch < num_epochs && !stop_training)
 	{
-		//std::vector<VectorXf> tmps; // Voor het bijhouden van verandering in de output.
-
 		// De dataset moet gepermuteerd worden voor stochastic gradient descent,
 		// hiervoor maken we een willekeurige permutatiematrix p om de datamatrix mee te vermenigvuldigen.
 		std::cout << "[Network|Training] Shuffling data matrix...\n";
@@ -324,6 +323,7 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 		// Doe Stochastic Gradient Descent
 		for (int set_index = 0; set_index + batch_size < tr_images.rows(); set_index += batch_size)
 		{
+			if(set_index % 500 == 0) MSE = 0;
 			for (int batch_index = 0; batch_index < batch_size; batch_index++)
 			{
 				// Reset de gradiënten
@@ -337,10 +337,6 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 
 				// Feed-forward
 				FeedForward(tr_images, batch_index + set_index);
-				if (analysis)
-				{
-					//tmps.push_back(a[layers - 1]);
-				}
 
 				// Backpropagation
 				for (int l = layers - 1; l > 0; l--)
@@ -375,8 +371,11 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 				}
 
 				// Bereken de error van deze afbeeldingsvector, tel het op bij de mean-squared error.
-				VectorXf toSquare = a[layers - 1] - expectedResults[tr_labels[batch_index + set_index]];
-				MSE += toSquare.dot(toSquare);
+				if (set_index % 1000 == 0)
+				{
+					VectorXf toSquare = a[layers - 1] - expectedResults[tr_labels[batch_index + set_index]];
+					MSE += toSquare.dot(toSquare);
+				}
 
 				if (epoch % 50 == 0 && debug)
 					std::cout << "[Network|Debug] Final layer activation:\n" << a[layers - 1] << "\n\n";
@@ -396,39 +395,22 @@ void Network::Train(int batch_size, int epochs, float learning_rate)
 				w[l - 1] -= (learning_rate / batch_size) * gradient_w[l - 1];
 			}
 
-			// kowalski
-			/*
-			if (analysis && epoch % 50 == 0)
+			if (set_index % 1000 == 0)
 			{
-				std::cout << "[Network|Analysis] Re-computing activations for the previous batch...\n";
-				for (int i = 0; i < batch_size; i++)
-				{
-					FeedForward(tr_images, aaaaaaaafafefaefacecaef);
-					VectorXf delta = a[layers - 1] - tmps[i];
-					std::cout << "[Network|Analysis] For this " << tr_labels[batch_indices[i]] <<
-						", the previous activation was:\n" << tmps[i] << "\nand the new activation is:\n"
-						<< a[layers - 1] << "\nhence, the delta vector is:\n"
-						<< delta << "\n\n";
-				}
+				MSE /= batch_size;
+				std::cout << "[Network|Training] Mean squared error: " << MSE << "\n";
 			}
-			*/
-
-			MSE /= batch_size;
-			std::cout << "[Network|Training] Mean squared error: " << MSE << "\n";
-			MSE = 0;
 		}
 
 		// Check progress
-		if (epoch % 500 == 0)
-		{
-			int size = ts_images.rows();
-			float recognised = 0;
-			for (int i = 0; i < size; i++)
-				recognised += (Classify(ts_images, i) == ts_labels[i]);
-			std::cout << "[Network|Training] Image recognition rate: " << recognised << " / " << size << "\n\n";
-		}
-		std::cout << "[Network|Training] Epochs trained: " << epoch + 1 << "\n";
+		int size = ts_images.rows();
+		float recognised = 0;
+		for (int i = 0; i < size; i++)
+			recognised += (Classify(ts_images, i) == ts_labels[i]);
+		std::cout << "[Network|Training] Image recognition rate: " << recognised << " / " << size << "\n\n";
+		std::cout << "[Network|Training] Epochs trained: " << ++epoch << "\n";
 	}
+	std::cout << "[Network] Final MSE is:" << MSE << "\n";
 	std::cout << "[Network] Network has successfully been trained\n";
 }
 
@@ -446,7 +428,7 @@ void init_network()
 	network->SetActivationFunction(&sigmoid);
 	network->SetActivationFunctionDerivative(&sigmoidDerivative);
 
-	network->AddLayer(784)->AddLayer(10)->AddLayer(10)->AddLayer(10);
+	network->AddLayer(784)->AddLayer(16)->AddLayer(16)->AddLayer(10);
 	network->SetDebugMode(0)->SetAnalysisMode(0);
 
 	network->finalize_init();
@@ -481,7 +463,10 @@ int main(int argc, char **argv)
 			init_network();
 			grid.init_data();
 			
-			network->Train(25, 15000, 0.7);
+			//network->Train(10, 40, 0.3350);
+			//network->Train(10, 40, 0.3355);
+			//network->Train(8, 40, 0.33480);
+			network->Train(10, 40, 3);
 
 			state = window.explore_state;
 		}
