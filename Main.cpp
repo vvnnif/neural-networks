@@ -56,8 +56,6 @@ const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 void print_mnist_image(VectorXf& data);
 void init_mnist();
 
-double sigmoid(double x);
-double sigmoidDerivative(double x);
 void init_network();
 
 // Nee, met "EigenVector" bedoel ik geen eigenvector.
@@ -108,32 +106,6 @@ void print_mnist_image(VectorXf& data)
 	}
 	std::cout << "\n";
 }
-
-// De sigmoid-activatiefunctie, beeldt R af op [0, 1].
-// ( sigma(x) = 1 / (1 + e^-x) )
-// \param x Het getal om af te beelden op [0, 1].
-double sigmoid(double x)
-{
-	return 1 / (1 + std::exp(-x));
-}
-
-double reLU(double x)
-{
-	return (x > 0 ? x : 0);
-}
-
-double reLUDerivative(double x)
-{
-	return (x > 0 ? 1 : 0);
-}
-
-// De afgeleide van de sigmoid-functie.
-double sigmoidDerivative(double x)
-{
-	return sigmoid(x) * (1 - sigmoid(x));
-}
-
-typedef double(*function)(double); // Voor het gemak, scheelt schrijfwerk
 
 class CostFunction
 {
