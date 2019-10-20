@@ -107,29 +107,88 @@ void print_mnist_image(VectorXf& data)
 	std::cout << "\n";
 }
 
-class CostFunction
+class NetworkFunction
 {
 public:
 
-	friend class Network;
+	NetworkFunction(const std::string _name) { name = _name; }
+
+	std::string GetName() const
+	{
+		return name;
+	}
+private:
+	std::string name = "NaN";
+};
+
+class CostFunction : public NetworkFunction
+{
+public:
+
+	CostFunction(const std::string name)
+		: NetworkFunction(name) {}
 
 	virtual float GetCost(VectorXf& a, VectorXf& y) const = 0;
 	virtual VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const = 0;
+
 };
 
-class ActivationFunction
+class ActivationFunction : public NetworkFunction
 {
 public:
-	
-	friend class Network;
+
+	ActivationFunction(const std::string name)
+		: NetworkFunction(name){}
 
 	virtual float Evaluate(float x) const = 0;
 	virtual float EvaluateDerivative(float x) const = 0;
+
+	virtual VectorXf Evaluate(VectorXf& x) const = 0;
+	virtual VectorXf EvaluateDerivative(VectorXf& x) const = 0;
+};
+
+class RegTerm : public NetworkFunction
+{
+public:
+
+	RegTerm(const std::string name)
+		: NetworkFunction(name){}
+
+	virtual float Evaluate(float lambda, int n, std::vector<MatrixXf>& w) = 0;
+	virtual MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w) = 0;
+};
+
+class L2 : public RegTerm
+{
+public:
+	
+	L2()
+		: RegTerm("L2"){}
+
+	float Evaluate(float lambda, int n, std::vector<MatrixXf>& w)
+	{
+		float s = 0;
+		for (int l = 0; l < w.size(); l++)
+		{
+			s += Eigen::pow(w[l].array(), 2).sum();
+		}
+		return (s * lambda) / (2 * n);
+	}
+
+	// Dit is eigenlijk niet de afgeleide van de L2-term, maar er kan op deze manier
+	// wel één matrixvermenigvuldigen bespaard worden voor optimalisatie. 
+	MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w)
+	{
+		return (lambda / n) * w;
+	}
 };
 
 class SigmoidActivation : public ActivationFunction
 {
 public:
+
+	SigmoidActivation()
+		: ActivationFunction("sigmoid"){}
 
 	float Evaluate(float x) const
 	{
@@ -141,11 +200,25 @@ public:
 		float temp = Evaluate(x);
 		return temp * (1 - temp);
 	}
+
+	VectorXf Evaluate(VectorXf& x) const
+	{
+		return 1 / (VectorXf::Constant(x.rows(), 1).array() + Eigen::exp(-x.array()));
+	}
+
+	VectorXf EvaluateDerivative(VectorXf& x) const
+	{
+		VectorXf temp = Evaluate(x);
+		return temp.cwiseProduct(VectorXf::Constant(x.rows(), 1) - temp);
+	}
 };
 
 class ReLUActivation : public ActivationFunction
 {
 public:
+
+	ReLUActivation()
+		: ActivationFunction("ReLU") {}
 
 	float Evaluate(float x) const
 	{
@@ -156,11 +229,55 @@ public:
 	{
 		return x > 0 ? 1 : 0;
 	}
+
+	VectorXf Evaluate(VectorXf& x) const
+	{
+		return x.cwiseMax(0);
+	}
+
+	VectorXf EvaluateDerivative(VectorXf& x) const
+	{
+		return x.array().cwiseMax(0) / x.array();
+	}
+};
+
+class SoftmaxActivation : public ActivationFunction
+{
+public:
+
+	SoftmaxActivation()
+		: ActivationFunction("softmax") {}
+
+	float Evaluate(float x) const
+	{
+		return 0; // Softmax voor één waarde kan niet gedefinieerd worden.
+	}
+
+	float EvaluateDerivative(float x) const
+	{
+		return 0; // Softmax voor één waarde kan niet gedefinieerd worden. 
+	}
+
+	VectorXf Evaluate(VectorXf& x) const
+	{
+		VectorXf expx = x.array().exp();
+		return expx / expx.sum();
+	}
+
+	VectorXf EvaluateDerivative(VectorXf& x) const
+	{
+		VectorXf temp = Evaluate(x);
+		return temp.cwiseProduct(VectorXf::Constant(x.rows(), 1) - temp);
+	}
 };
 
 class CrossentropyCost : public CostFunction
 {
 public:
+
+	CrossentropyCost()
+		: CostFunction("crossentropy") {};
+
 	float GetCost(VectorXf& a, VectorXf& y) const
 	{
 		float s = 0;
@@ -180,6 +297,9 @@ public:
 class QuadraticCost : public CostFunction
 {
 public:
+	QuadraticCost()
+		: CostFunction("quadratic") {};
+
 	float GetCost(VectorXf& a, VectorXf& y) const
 	{
 		float s = 0;
@@ -194,16 +314,40 @@ public:
 	}
 };
 
+class LoglikelihoodCost : public CostFunction
+{
+public:
+
+	LoglikelihoodCost()
+		: CostFunction("log-likelihood") {};
+
+	float GetCost(VectorXf& a, VectorXf& y) const
+	{
+		VectorXf::Index maxIndex;
+		int x = y.array().maxCoeff(&maxIndex);
+		return -log(a(maxIndex));
+	}
+
+	VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const
+	{
+		return a - y;
+	}
+};
+
 const CostFunction* quadratic_cost = new QuadraticCost();
 const CostFunction* crossentropy_cost = new CrossentropyCost();
+const CostFunction* loglikelihood_cost = new LoglikelihoodCost();
 const ActivationFunction* ReLU_activation = new ReLUActivation();
 const ActivationFunction* sigmoid_activation = new SigmoidActivation();
+const ActivationFunction* softmax_activation = new SoftmaxActivation();
 
 // De implementatie van het neurale netwerk. 
 class Network
 {
 public:
 	Network(std::vector<int> layer_args, const CostFunction* cost_function, const ActivationFunction* activation_function);
+	Network(std::vector<int> layer_args, const CostFunction* cost_function, 
+		const ActivationFunction* activation_function, const ActivationFunction* L_activation_function);
 	~Network();
 
 	friend class CostFunction;
@@ -227,7 +371,7 @@ public:
 	std::vector<MatrixXf> gradient_w;
 private:
 	const CostFunction* cost_function;
-	const ActivationFunction* activation_function;
+	const ActivationFunction* activation_function, * L_activation_function;
 
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 
@@ -288,7 +432,15 @@ Network* Network::AddLayer(int n_neurons)
 // \param input_neurons Aantal neuronen in de inputlaag (aantal pixels in afbeelding)
 // \param output_neurons Aantal neuronen in de outputlaag (aantal verschillende te herkennen getallen)
 Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function, const ActivationFunction* _activation_function)
-	: cost_function(_cost_function), activation_function(_activation_function)
+	: cost_function(_cost_function), activation_function(_activation_function), L_activation_function(_activation_function)
+{
+	for (int n : layer_args)
+		AddLayer(n);
+}
+
+Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function,
+	const ActivationFunction* _activation_function, const ActivationFunction* _L_activation_function)
+	: cost_function(_cost_function), activation_function(_activation_function), L_activation_function(_L_activation_function)
 {
 	for (int n : layer_args)
 		AddLayer(n);
@@ -305,10 +457,10 @@ void Network::FeedForward(MatrixXf& data, int x)
 	for (int l = 1; l < layers; l++)
 	{
 		z[l] = w[l - 1] * a[l - 1] + b[l - 1]; // Feed-forward voor elke laag.
-		for (int i = 0; i < layerNeurons[l]; i++)
-		{
-			a[l](i) = activation_function->Evaluate(z[l](i)); // Bepaal de activaties met behulp van de activatiefunctie.
-		}
+		if (l == layers - 1)
+			a[l] = L_activation_function->Evaluate(z[l]);
+		else
+			a[l] = activation_function->Evaluate(z[l]);
 	}
 }
 
@@ -358,12 +510,9 @@ void Network::Train(int batch_size, int num_epochs, float learning_rate)
 				VectorXf y = GetExpectedLabel(set_index + batch_index);
 
 				// Backpropagation
-				
 				for (int l = layers - 1; l > 0; l--)
 				{
-					VectorXf derivatives(layerNeurons[l]);
-					for (int i = 0; i < layerNeurons[l]; i++)
-						derivatives(i) = activation_function->EvaluateDerivative(z[l](i));
+					VectorXf derivatives = activation_function->EvaluateDerivative(z[l]);
 					if (l == layers - 1)
 						deltas[l - 1] = cost_function->GetDeltaL(a[layers - 1], y, derivatives);
 					else
@@ -414,7 +563,7 @@ void init_network()
 {
 	std::cout << "[Network|Init] Initializing neural network..\n";
 
-	network = new Network({ 784, 32, 10 }, crossentropy_cost, sigmoid_activation);
+	network = new Network({ 784, 32, 10 }, loglikelihood_cost, sigmoid_activation, softmax_activation);
 	network->finalize_init();
 
 	std::cout << "[Network|Init] Successfully initialized neural network\n";
@@ -450,7 +599,7 @@ int main(int argc, char **argv)
 			//network->Train(8, 40, 0.33480);
 			//network->Train(8, 10, 3); // 95% met 1 32-neuron laag en kwadratische kostenfunctie.
 			//network->Train(10, 5, 0.001); // shitty ReLU
-			network->Train(8, 10, 0.05);
+			network->Train(8, 10, 0.5);
 
 			state = window.explore_state;
 		}
