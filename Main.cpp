@@ -312,7 +312,7 @@ public:
 		return s;
 		*/
 		VectorXf ones = VectorXf::Constant(a.rows(), 1);
-		return -((y.array() * a.array().log()) - ((ones.array() - y.array()) * (ones.array() - a.array()).log())).sum();
+		return (-(y.array() * a.array().log()) - ((ones.array() - y.array()) * (ones.array() - a.array()).log())).sum();
 	}
 
 	VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const
@@ -386,20 +386,23 @@ public:
 	int Classify(MatrixXf& data, int x);
 
 	Network* AddLayer(int n_neurons);
-	Network* SetRegularisation(RegTerm* reg_term);
+	Network* SetRegularisation(RegTerm* reg_term, float lambda);
+	Network* SetOptimizer(int optimizer_id, float gamma);
 
 	void finalize_init();
 
 	VectorXf GetExpectedLabel(int index);
 
-	void Train(int batch_size, int epochs, float learning_rate);
-	void Train(int batch_size, int epochs, float learning_rate, float lambda);
+	void Train(int batch_size, int epochs, float eta);
 
 	std::vector<MatrixXf> w;
 	std::vector<VectorXf> a, b, z, deltas, expectedResults;
 
-	std::vector<VectorXf> gradient_b;
-	std::vector<MatrixXf> gradient_w;
+	std::vector<VectorXf> gradient_b, vel_b;
+	std::vector<MatrixXf> gradient_w, vel_w;
+
+	const enum optimizers{none, momentum_optimizer, adagrad_optimizer};
+
 private:
 	const CostFunction* cost_function;
 	const ActivationFunction* activation_function, * L_activation_function;
@@ -408,12 +411,22 @@ private:
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 
 	float error = 0;
+	float gamma = 0, lambda = 0;
 	bool stop_training = 0, do_regularisation = 0;
+	int optimizer_id = 0;
 };
 
-Network* Network::SetRegularisation(RegTerm* _reg_term)
+Network* Network::SetOptimizer(int _optimizer_id, float _gamma)
+{
+	optimizer_id = _optimizer_id;
+	gamma = _gamma;
+	return this;
+}
+
+Network* Network::SetRegularisation(RegTerm* _reg_term, float _lambda)
 {
 	reg_term = _reg_term;
+	lambda = _lambda;
 	do_regularisation = 1;
 	return this;
 }
@@ -444,15 +457,16 @@ void Network::finalize_init()
 		{
 			deltas.push_back(zero);
 
-			MatrixXf weight = MatrixXf::Constant(layerNeurons[i], layerNeurons[i - 1], 0);
-			VectorXf bias = VectorXf::Constant(layerNeurons[i], 0);
+			MatrixXf w_zero = MatrixXf::Constant(layerNeurons[i], layerNeurons[i - 1], 0);
+			VectorXf b_zero = VectorXf::Constant(layerNeurons[i], 0);
+			MatrixXf weight = w_zero;
+			VectorXf bias = b_zero;
 
 			for (int i = 0; i < weight.rows(); i++)
 			{
 				for (int j = 0; j < weight.cols(); j++)
 				{
 					weight(i, j) = weight_distr(pseudorandom_generator);
-					//std::cout << "[Debug] Initialized weight as " << weight(i, j) << "\n";
 				}
 			}
 
@@ -462,7 +476,10 @@ void Network::finalize_init()
 			}
 
 			w.push_back(weight);
+			vel_w.push_back(w_zero);
+
 			b.push_back(bias);
+			vel_b.push_back(b_zero);
 
 			//std::cout << randomWeightMatrix << "\n";
 
@@ -542,12 +559,7 @@ int Network::Classify(MatrixXf& data, int x)
 	return max_index;
 }
 
-void Network::Train(int batch_size, int num_epochs, float learning_rate)
-{
-	Train(batch_size, num_epochs, learning_rate, 0);
-}
-
-void Network::Train(int batch_size, int num_epochs, float learning_rate, float lambda)
+void Network::Train(int batch_size, int num_epochs, float eta)
 {
 	std::cout << "[Network] Network has started training\n";
 	int layers = layerNeurons.size();
@@ -602,16 +614,30 @@ void Network::Train(int batch_size, int num_epochs, float learning_rate, float l
 			// Update de waarden met de gradiënt
 			for (int l = 1; l < layers; l++)
 			{
+				switch (optimizer_id)
+				{
+				case momentum_optimizer:
+				{
+					vel_w[l - 1] = (gamma * vel_w[l - 1]) + ((eta / batch_size) * gradient_w[l - 1]);
+					w[l - 1] -= vel_w[l - 1];
+
+					vel_b[l - 1] = (gamma * vel_b[l - 1]) + ((eta / batch_size) * gradient_b[l - 1]);
+					b[l - 1] -= vel_b[l - 1];
+				}
+				break;
+				case none:
+				{
+					w[l - 1] -= (eta / batch_size) * gradient_w[l - 1];
+					b[l - 1] -= (eta / batch_size) * gradient_b[l - 1];
+				}
+				break;
+				}
+
 				if (do_regularisation)
 				{
-					w[l - 1] -= learning_rate * (reg_term->EvaluateDerivative(lambda, tr_images.rows(), w[l - 1])
-						+ (gradient_w[l - 1] / batch_size));
+					w[l - 1] -= eta * reg_term->EvaluateDerivative(lambda, tr_images.rows(), w[l - 1]);
 				}
-				else
-				{
-					w[l - 1] -= (learning_rate / batch_size) * gradient_w[l - 1];
-				}
-				b[l - 1] -= (learning_rate / batch_size) * gradient_b[l - 1];
+
 				gradient_w[l - 1].fill(0);
 				gradient_b[l - 1].fill(0);
 			}
@@ -642,8 +668,9 @@ void init_network()
 {
 	std::cout << "[Network|Init] Initializing neural network..\n";
 
-	network = new Network({ 784, 64, 10 }, crossentropy_cost, sigmoid_activation);
-	network->SetRegularisation(L2_regularisation);
+	network = new Network({ 784, 32, 10 }, crossentropy_cost, sigmoid_activation);
+	//network->SetRegularisation(L2_regularisation, 5.0);
+	network->SetOptimizer(network->momentum_optimizer, 0.9);
 
 	std::cout << "[Network|Init] Successfully initialized neural network\n";
 }
@@ -678,7 +705,7 @@ int main(int argc, char **argv)
 			//network->Train(8, 40, 0.33480);
 			//network->Train(8, 10, 3); // 95% met 1 32-neuron laag en kwadratische kostenfunctie.
 			//network->Train(10, 5, 0.001); // shitty ReLU
-			network->Train(10, 15, 0.8, 5.0);
+			network->Train(10, 15, 0.01);
 
 			state = window.explore_state;
 		}
