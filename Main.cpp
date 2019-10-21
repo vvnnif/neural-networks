@@ -26,6 +26,7 @@
 #include <string>
 #include <fstream>
 #include <iomanip>
+#include <random>
 
 // Hier is de visualisatie-component van het project, alhoewel het niets
 // toevoegt aan de theorie achter het profielwerkstuk kunt u het natuurlijk
@@ -158,11 +159,11 @@ public:
 	virtual MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w) = 0;
 };
 
-class L2 : public RegTerm
+class L2Regularisation : public RegTerm
 {
 public:
 	
-	L2()
+	L2Regularisation()
 		: RegTerm("L2"){}
 
 	float Evaluate(float lambda, int n, std::vector<MatrixXf>& w)
@@ -180,6 +181,28 @@ public:
 	MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w)
 	{
 		return (lambda / n) * w;
+	}
+};
+
+class L1Regularisation : public RegTerm
+{
+public:
+	L1Regularisation()
+		: RegTerm("L1") {}
+
+	float Evaluate(float lambda, int n, std::vector<MatrixXf>& w)
+	{
+		float s = 0;
+		for (int l = 0; l < w.size(); l++)
+		{
+			s += Eigen::abs(w[l].array()).sum();
+		}
+		return (s * lambda) / n;
+	}
+
+	MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w)
+	{
+		return (lambda / n) * Eigen::sign(w.array());
 	}
 };
 
@@ -280,12 +303,16 @@ public:
 
 	float GetCost(VectorXf& a, VectorXf& y) const
 	{
+		/*
 		float s = 0;
 		for (int i = 0; i < a.rows(); i++)
 		{
-			s += (-y(i, 0) * std::log(a(i, 0))) - ((1 - y(i, 0)) * std::log((1 - a(i, 0))));
+			s += (-y(i) * std::log(a(i))) - ((1 - y(i)) * std::log((1 - a(i))));
 		}
 		return s;
+		*/
+		VectorXf ones = VectorXf::Constant(a.rows(), 1);
+		return -((y.array() * a.array().log()) - ((ones.array() - y.array()) * (ones.array() - a.array()).log())).sum();
 	}
 
 	VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const
@@ -340,6 +367,8 @@ const CostFunction* loglikelihood_cost = new LoglikelihoodCost();
 const ActivationFunction* ReLU_activation = new ReLUActivation();
 const ActivationFunction* sigmoid_activation = new SigmoidActivation();
 const ActivationFunction* softmax_activation = new SoftmaxActivation();
+static RegTerm* L2_regularisation = new L2Regularisation();
+static RegTerm* L1_regularisation = new L1Regularisation();
 
 // De implementatie van het neurale netwerk. 
 class Network
@@ -357,12 +386,14 @@ public:
 	int Classify(MatrixXf& data, int x);
 
 	Network* AddLayer(int n_neurons);
+	Network* SetRegularisation(RegTerm* reg_term);
 
 	void finalize_init();
 
 	VectorXf GetExpectedLabel(int index);
 
 	void Train(int batch_size, int epochs, float learning_rate);
+	void Train(int batch_size, int epochs, float learning_rate, float lambda);
 
 	std::vector<MatrixXf> w;
 	std::vector<VectorXf> a, b, z, deltas, expectedResults;
@@ -372,12 +403,20 @@ public:
 private:
 	const CostFunction* cost_function;
 	const ActivationFunction* activation_function, * L_activation_function;
+	RegTerm* reg_term;
 
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 
 	float error = 0;
-	bool stop_training = 0;
+	bool stop_training = 0, do_regularisation = 0;
 };
+
+Network* Network::SetRegularisation(RegTerm* _reg_term)
+{
+	reg_term = _reg_term;
+	do_regularisation = 1;
+	return this;
+}
 
 VectorXf Network::GetExpectedLabel(int index)
 {
@@ -387,6 +426,14 @@ VectorXf Network::GetExpectedLabel(int index)
 void Network::finalize_init()
 {
 	std::cout << "[Network|Init] Initializing network values..\n";
+
+	float mu = 0, sigma = 1 / std::sqrt(layerNeurons[0]);
+
+	std::random_device randomness_device{};
+	std::mt19937 pseudorandom_generator{ randomness_device() };
+	std::normal_distribution<float> weight_distr(mu, sigma);
+	std::normal_distribution<float> bias_distr(0, 1);
+
 	for (size_t i = 0; i < layerNeurons.size(); i++)
 	{
 		VectorXf zero = VectorXf::Zero(layerNeurons[i]); 
@@ -395,14 +442,27 @@ void Network::finalize_init()
 
 		if (i > 0)
 		{
-			//VectorXf bias = VectorXf::Constant(layerNeurons[i], 0.1);
-			b.push_back(zero);
 			deltas.push_back(zero);
 
-			// Een techniek die bekend staat als "He-initialization".
-			//MatrixXf randomWeightMatrix = std::sqrt(2 / layerNeurons[i - 1]) * MatrixXf::Random(layerNeurons[i], layerNeurons[i - 1]);
-			MatrixXf randomWeightMatrix = MatrixXf::Random(layerNeurons[i], layerNeurons[i - 1]);
-			w.push_back(randomWeightMatrix);
+			MatrixXf weight = MatrixXf::Constant(layerNeurons[i], layerNeurons[i - 1], 0);
+			VectorXf bias = VectorXf::Constant(layerNeurons[i], 0);
+
+			for (int i = 0; i < weight.rows(); i++)
+			{
+				for (int j = 0; j < weight.cols(); j++)
+				{
+					weight(i, j) = weight_distr(pseudorandom_generator);
+					//std::cout << "[Debug] Initialized weight as " << weight(i, j) << "\n";
+				}
+			}
+
+			for (int i = 0; i < bias.rows(); i++)
+			{
+				bias(i) = bias_distr(pseudorandom_generator);
+			}
+
+			w.push_back(weight);
+			b.push_back(bias);
 
 			//std::cout << randomWeightMatrix << "\n";
 
@@ -436,6 +496,7 @@ Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function
 {
 	for (int n : layer_args)
 		AddLayer(n);
+	finalize_init();
 }
 
 Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function,
@@ -444,6 +505,7 @@ Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function
 {
 	for (int n : layer_args)
 		AddLayer(n);
+	finalize_init();
 }
 
 Network::~Network() { delete cost_function; delete activation_function; }
@@ -481,6 +543,11 @@ int Network::Classify(MatrixXf& data, int x)
 }
 
 void Network::Train(int batch_size, int num_epochs, float learning_rate)
+{
+	Train(batch_size, num_epochs, learning_rate, 0);
+}
+
+void Network::Train(int batch_size, int num_epochs, float learning_rate, float lambda)
 {
 	std::cout << "[Network] Network has started training\n";
 	int layers = layerNeurons.size();
@@ -525,14 +592,26 @@ void Network::Train(int batch_size, int num_epochs, float learning_rate)
 				if (set_index % 1000 == 0)
 				{
 					error += cost_function->GetCost(a[layers - 1], y);
+					if (do_regularisation)
+					{
+						error += reg_term->Evaluate(lambda, tr_images.size(), w);
+					}
 				}
 			}
 
 			// Update de waarden met de gradiënt
 			for (int l = 1; l < layers; l++)
 			{
+				if (do_regularisation)
+				{
+					w[l - 1] -= learning_rate * (reg_term->EvaluateDerivative(lambda, tr_images.rows(), w[l - 1])
+						+ (gradient_w[l - 1] / batch_size));
+				}
+				else
+				{
+					w[l - 1] -= (learning_rate / batch_size) * gradient_w[l - 1];
+				}
 				b[l - 1] -= (learning_rate / batch_size) * gradient_b[l - 1];
-				w[l - 1] -= (learning_rate / batch_size) * gradient_w[l - 1];
 				gradient_w[l - 1].fill(0);
 				gradient_b[l - 1].fill(0);
 			}
@@ -563,8 +642,8 @@ void init_network()
 {
 	std::cout << "[Network|Init] Initializing neural network..\n";
 
-	network = new Network({ 784, 32, 10 }, loglikelihood_cost, sigmoid_activation, softmax_activation);
-	network->finalize_init();
+	network = new Network({ 784, 64, 10 }, crossentropy_cost, sigmoid_activation);
+	network->SetRegularisation(L2_regularisation);
 
 	std::cout << "[Network|Init] Successfully initialized neural network\n";
 }
@@ -599,7 +678,7 @@ int main(int argc, char **argv)
 			//network->Train(8, 40, 0.33480);
 			//network->Train(8, 10, 3); // 95% met 1 32-neuron laag en kwadratische kostenfunctie.
 			//network->Train(10, 5, 0.001); // shitty ReLU
-			network->Train(8, 10, 0.5);
+			network->Train(10, 15, 0.8, 5.0);
 
 			state = window.explore_state;
 		}
