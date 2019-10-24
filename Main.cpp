@@ -36,10 +36,6 @@
 // wel bekijken.
 #include "visual.h"
 
-#ifndef _DO_PARALLEL_TRAINING
-#define _DO_PARALLEL_TRAINING
-#endif
-
 #define uint unsigned int
 typedef Eigen::Matrix<uint, Dynamic, 1> VectorXui;
 
@@ -427,6 +423,27 @@ private:
 	int optimizer_id = 0;
 };
 
+class Timer
+{
+public:
+	typedef std::chrono::time_point<std::chrono::steady_clock> time_point;
+
+	Timer(const std::string& _event_name)
+		: start_time(start_time = std::chrono::high_resolution_clock::now()),
+		event_name(_event_name){}
+
+	~Timer()
+	{
+		time_point end_time = std::chrono::high_resolution_clock::now();
+		long elapsed = (end_time - start_time) / std::chrono::milliseconds(1);
+		std::cout << "[Timer] " << event_name << ": "
+			<< elapsed << "ms\n";
+	}
+private:
+	time_point start_time;
+	const std::string event_name;
+};
+
 void Network::UpdateDropoutMasks()
 {
 	std::random_device randomness_device{};
@@ -588,7 +605,7 @@ void Network::FeedForward(int x, bool is_test)
 		{
 			if (do_dropout && l < layerNeurons.size() - 1)
 			{
-				z[l] = (w[l - 1] * a[l - 1].cwiseProduct(r[l - 1]) + b[l - 1]);
+				z[l] = (w[l - 1] * a[l - 1].cwiseProduct(r[l - 1])) + b[l - 1];
 			}
 			else
 			{
@@ -606,13 +623,12 @@ void Network::FeedForward(int x, bool is_test)
 int Network::Classify(MatrixXf& data, int x)
 {
 	FeedForward(x, 1);
-	int layers = layerNeurons.size();
 	VectorXf::Index maxIndex;
-	int i = a[layers - 1].array().maxCoeff(&maxIndex);
+	int i = a[layerNeurons.size() - 1].array().maxCoeff(&maxIndex);
 	return maxIndex;
 }
 
-typedef std::chrono::time_point<std::chrono::steady_clock> Timer;
+//typedef std::chrono::time_point<std::chrono::steady_clock> Timer;
 
 void Network::Train(int batch_size, int num_epochs, float eta)
 {
@@ -627,7 +643,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 	VectorXf derivatives;
 	VectorXf y;
 
-	Timer batch_time_begin, batch_time_end;
+	//Timer batch_time_begin, batch_time_end;
 	while(epoch < num_epochs && !stop_training)
 	{
 		// De dataset moet gepermuteerd worden voor stochastic gradient descent,
@@ -637,6 +653,9 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		tr_images = p * tr_images;
 		tr_labels = p * tr_labels; // Vermenigvuldig ook de labels met p.
 		//std::cout << "[Network|Training] Data matrix has been shuffled\n";
+		
+		Timer timer = Timer("epoch_time");
+		std::cout << "\n";
 
 		// Doe Stochastic Gradient Descent
 		for (int set_index = 0; set_index + batch_size < tr_images.rows(); set_index += batch_size)
@@ -645,7 +664,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			{
 				error = 0;
 			}
-			//batch_time_begin = std::chrono::high_resolution_clock::now();
 			for (int batch_index = 0; batch_index < batch_size; batch_index++)
 			{
 				// Feed-forward
@@ -699,15 +717,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 
 					vel_w[l - 1] += gradient_w[l - 1].array().pow(2).matrix();
 					vel_b[l - 1] += gradient_b[l - 1].array().pow(2).matrix();
-					
-					/*
-					if (set_index % 10000 == 0 && l != 1)
-					{
-						std::cout << "vel_w: " << vel_w[l - 1] << "\n";
-						std::cout << "vel_b: " << vel_b[l - 1] << "\n";
-					}
-					*/
-					
 				}
 				break;
 				case none:
@@ -725,9 +734,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 				gradient_w[l - 1].fill(0);
 				gradient_b[l - 1].fill(0);
 			}
-			//batch_time_end = std::chrono::high_resolution_clock::now();
-			//auto elapsed_time = batch_time_end - batch_time_begin;
-			//std::cout << "[Network|Training] Time elapsed: " << elapsed_time / std::chrono::milliseconds(1) << "ms\n";
 
 			if (set_index % 10000 == 0)
 			{
@@ -742,8 +748,8 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		float recognised = 0;
 		for (int i = 0; i < size; i++)
 			recognised += (Classify(ts_images, i) == ts_labels[i]);
-		std::cout << "[Network|Training] Accuracy: " << recognised << " / " << size << "\n\n";
 		std::cout << "[Network|Training] Epochs trained: " << ++epoch << "\n";
+		std::cout << "[Network|Training] Accuracy: " << recognised << " / " << size << "\n";
 
 		if (do_dropout)
 			UpdateDropoutMasks();
@@ -759,14 +765,14 @@ void TrainInParallel(int num_networks)
 {
 #pragma omp parallel num_threads(num_networks)
 	{
-		srand(time(NULL) + omp_get_thread_num() * 2 << 6);
-		float r = ala::GetUniformRandom<float>(0, 1);
+		srand(omp_get_thread_num() << 8);
+		float r = ala::GetUniformRandom<float>(0.001, 1);
 		std::cout << r << "\n";
 		Network* network = new Network({ 784, 32, 10 },
 			loglikelihood_cost,
 			ReLU_activation,
 			softmax_activation);
-
+		
 		network->SetRegularisation(L2_regularisation, 5.0);
 		network->SetOptimizer(network->momentum_optimizer, 0.9);
 		//network->SetDropout(0.5);
@@ -776,9 +782,9 @@ void TrainInParallel(int num_networks)
 
 int main(int argc, char **argv)
 {
+	//Eigen::initParallel();
 	omp_set_num_threads(8);
 	std::cout << "[Debug] Running Eigen on " << Eigen::nbThreads() << " threads\n";
-	Eigen::initParallel();
 	state = window.loading_state;
 	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
 
@@ -800,8 +806,22 @@ int main(int argc, char **argv)
 		{
 			init_mnist();
 
+			Network* network = new Network({ 784, 32, 10 },
+				loglikelihood_cost,
+				ReLU_activation,
+				softmax_activation);
+
+			network->SetRegularisation(L2_regularisation, 5.0);
+			network->SetOptimizer(network->momentum_optimizer, 0.9);
+			//network->SetDropout(0.5);
+			network->Train(10, 100, 0.01);
+
+#ifndef _DO_PARALLEL_TRAINING
+#define _DO_PARALLEL_TRAINING
+#endif
+
 #ifdef _DO_PARALLEL_TRAINING
-			TrainInParallel(8);
+			//TrainInParallel(2);
 #endif
 
 			//grid.init_data();
