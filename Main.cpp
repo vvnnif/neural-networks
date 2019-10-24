@@ -133,8 +133,10 @@ public:
 		: NetworkFunction(name) {}
 
 	virtual float GetCost(VectorXf& a, VectorXf& y) const = 0;
+	virtual float GetCost(MatrixXf& a, MatrixXf& y) const = 0;
+	
 	virtual VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const = 0;
-
+	virtual MatrixXf GetDeltaL(MatrixXf& a, MatrixXf& y, MatrixXf& other) const = 0;
 };
 
 class ActivationFunction : public NetworkFunction
@@ -149,6 +151,9 @@ public:
 
 	virtual void Evaluate(VectorXf& container, VectorXf& x) const = 0;
 	virtual void EvaluateDerivative(VectorXf& container, VectorXf& x) const = 0;
+
+	virtual void Evaluate(MatrixXf& container, MatrixXf& x) const = 0;
+	virtual void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const = 0;
 };
 
 class RegTerm : public NetworkFunction
@@ -229,13 +234,26 @@ public:
 
 	void Evaluate(VectorXf& container, VectorXf& x) const
 	{
-		container = 1 / (VectorXf::Constant(x.rows(), 1).array() + Eigen::exp(-x.array()));
+		container = 1 / (VectorXf::Constant(x.rows(), 1).array() 
+			+ Eigen::exp(-x.array()));
 	}
-
 	void EvaluateDerivative(VectorXf& container, VectorXf& x) const
 	{
-		VectorXf temp = 1 / (VectorXf::Constant(x.rows(), 1).array() + Eigen::exp(-x.array()));
+		VectorXf temp = 1 / (VectorXf::Constant(x.rows(), 1).array() 
+			+ Eigen::exp(-x.array()));
 		container = temp.cwiseProduct(VectorXf::Constant(x.rows(), 1) - temp);
+	}
+
+	void Evaluate(MatrixXf& container, MatrixXf& x) const
+	{
+		container = 1 / (MatrixXf::Constant(x.rows(), x.cols(), 1).array() 
+			+ Eigen::exp(-x.array()));
+	}
+	void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const
+	{
+		MatrixXf temp = 1 / (MatrixXf::Constant(x.rows(), x.cols(), 1).array() 
+			+ Eigen::exp(-x.array()));
+		container = temp.cwiseProduct(MatrixXf::Constant(x.rows(), x.cols(), 1) - temp);
 	}
 };
 
@@ -248,7 +266,7 @@ public:
 
 	float Evaluate(float x) const
 	{
-		return x > 0 ? x : 0;
+		return std::max(0.0f, x);
 	}
 
 	float EvaluateDerivative(float x) const
@@ -260,8 +278,16 @@ public:
 	{
 		container = x.cwiseMax(0);
 	}
-
 	void EvaluateDerivative(VectorXf& container, VectorXf& x) const
+	{
+		container = x.array().cwiseMax(0) / x.array();
+	}
+
+	void Evaluate(MatrixXf& container, MatrixXf& x) const
+	{
+		container = x.cwiseMax(0);
+	}
+	void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const
 	{
 		container = x.array().cwiseMax(0) / x.array();
 	}
@@ -289,12 +315,23 @@ public:
 		VectorXf expx = x.array().exp();
 		container = expx / expx.sum();
 	}
-
 	void EvaluateDerivative(VectorXf& container, VectorXf& x) const
 	{
 		VectorXf expx = x.array().exp();
 		expx /= expx.sum();
 		container = expx.cwiseProduct(VectorXf::Constant(x.rows(), 1) - expx);
+	}
+
+	void Evaluate(MatrixXf& container, MatrixXf& x) const
+	{
+		MatrixXf expx = x.array().exp();
+		container = expx.array() / expx.colwise().sum().array();
+	}
+	void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const
+	{
+		MatrixXf expx = x.array().exp();
+		expx = expx.array() / expx.colwise().sum().array();
+		container = expx.cwiseProduct(MatrixXf::Constant(x.rows(), x.cols(), 1) - expx);
 	}
 };
 
@@ -307,21 +344,26 @@ public:
 
 	float GetCost(VectorXf& a, VectorXf& y) const
 	{
-		/*
-		float s = 0;
-		for (int i = 0; i < a.rows(); i++)
-		{
-			s += (-y(i) * std::log(a(i))) - ((1 - y(i)) * std::log((1 - a(i))));
-		}
-		return s;
-		*/
 		VectorXf ones = VectorXf::Constant(a.rows(), 1);
-		return (-(y.array() * a.array().log()) - ((ones.array() - y.array()) * (ones.array() - a.array()).log())).sum();
+		return (-(y.array() * a.array().log()) - ((ones.array() - y.array()) 
+			* (ones.array() - a.array()).log())).sum();
 	}
-
 	VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const
 	{
 		return a - y;
+	}
+
+	float GetCost(MatrixXf& A, MatrixXf& Y) const
+	{
+		MatrixXf onesCol = MatrixXf::Constant(A.cols(), 1, 1);
+		MatrixXf ones = MatrixXf::Constant(A.rows(), A.cols(), 1);
+		return (((-(Y.array() * A.array().log()) - ((ones - Y).array() 
+		* (ones - A).array().log())).colwise().sum()).matrix() * onesCol)
+		.operator()(0,0);
+	}
+	MatrixXf GetDeltaL(MatrixXf& A, MatrixXf& Y, MatrixXf& other) const
+	{
+		return A - Y;
 	}
 };
 
@@ -333,15 +375,23 @@ public:
 
 	float GetCost(VectorXf& a, VectorXf& y) const
 	{
-		float s = 0;
 		VectorXf toSquare = a - y;
-		s += toSquare.dot(toSquare);
-		return s;
+		return toSquare.dot(toSquare);
 	}
-
 	VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const
 	{
 		return (a - y).cwiseProduct(other);
+	}
+
+	float GetCost(MatrixXf& A, MatrixXf& Y) const
+	{
+		MatrixXf onesRow = MatrixXf::Constant(1, A.rows(), 1);
+		MatrixXf toSquare = A - Y;
+		return ((onesRow * toSquare.cwiseProduct(toSquare)) * onesRow.transpose()).operator()(0,0);
+	}
+	MatrixXf GetDeltaL(MatrixXf& A, MatrixXf& Y, MatrixXf& other) const
+	{
+		return (A - Y).cwiseProduct(other);
 	}
 };
 
@@ -358,10 +408,25 @@ public:
 		int x = y.array().maxCoeff(&maxIndex);
 		return -log(a(maxIndex));
 	}
-
 	VectorXf GetDeltaL(VectorXf& a, VectorXf& y, VectorXf& other) const
 	{
 		return a - y;
+	}
+
+	float GetCost(MatrixXf& A, MatrixXf& Y) const
+	{
+		VectorXf::Index maxIndex;
+		float s = 0;
+		for (int i = 0; i < A.cols(); i++)
+		{
+			int x = Y.col(i).array().maxCoeff(&maxIndex);
+			s += -log(A(maxIndex, i));
+		}
+		return s;
+	}
+	MatrixXf GetDeltaL(MatrixXf& A, MatrixXf& Y, MatrixXf& other) const
+	{
+		return A - Y;
 	}
 };
 
@@ -404,6 +469,9 @@ public:
 	std::vector<MatrixXf> w;
 	std::vector<VectorXf> a, b, z, deltas, expectedResults, r;
 
+	// Voor als het netwerk gevectoriseert is
+	std::vector<MatrixXf> A, B, Z, Deltas;
+
 	std::vector<VectorXf> gradient_b, vel_b;
 	std::vector<MatrixXf> gradient_w, vel_w;
 
@@ -419,8 +487,8 @@ private:
 	float error = 0;
 	float gamma = 0, lambda = 0, dropout_p = 0.5;
 	const float epsilon = 1e-4;
-	bool stop_training = 0, do_regularisation = 0, do_dropout = 0;
-	int optimizer_id = 0;
+	bool stop_training = 0, do_regularisation = 0, do_dropout = 0, do_vectorization = 0;
+	int optimizer_id = 0, batch_size;
 };
 
 class Timer
@@ -514,42 +582,49 @@ void Network::finalize_init()
 
 	for (size_t i = 0; i < layerNeurons.size(); i++)
 	{
-		VectorXf zero = VectorXf::Zero(layerNeurons[i]); 
-		a.push_back(zero);
-		z.push_back(zero);
-
-		if (i > 0)
+		if (do_vectorization)
 		{
-			deltas.push_back(zero);
 
-			MatrixXf w_zero = MatrixXf::Constant(layerNeurons[i], layerNeurons[i - 1], 0);
-			VectorXf b_zero = VectorXf::Constant(layerNeurons[i], 0);
-			MatrixXf weight = w_zero;
-			VectorXf bias = b_zero;
+		}
+		else
+		{
+			VectorXf zero = VectorXf::Zero(layerNeurons[i]);
+			a.push_back(zero);
+			z.push_back(zero);
 
-			for (int i = 0; i < weight.rows(); i++)
+			if (i > 0)
 			{
-				for (int j = 0; j < weight.cols(); j++)
+				deltas.push_back(zero);
+
+				MatrixXf w_zero = MatrixXf::Constant(layerNeurons[i], layerNeurons[i - 1], 0);
+				VectorXf b_zero = VectorXf::Constant(layerNeurons[i], 0);
+				MatrixXf weight = w_zero;
+				VectorXf bias = b_zero;
+
+				for (int i = 0; i < weight.rows(); i++)
 				{
-					weight(i, j) = weight_distr(pseudorandom_generator);
+					for (int j = 0; j < weight.cols(); j++)
+					{
+						weight(i, j) = weight_distr(pseudorandom_generator);
+					}
 				}
+
+				for (int i = 0; i < bias.rows(); i++)
+				{
+					bias(i) = bias_distr(pseudorandom_generator);
+				}
+
+				w.push_back(weight);
+				vel_w.push_back(w_zero);
+
+				b.push_back(bias);
+				vel_b.push_back(b_zero);
+
+				//std::cout << randomWeightMatrix << "\n";
+
+				gradient_b.push_back(zero);
+				gradient_w.push_back(MatrixXf::Zero(layerNeurons[i], layerNeurons[i - 1]));
 			}
-
-			for (int i = 0; i < bias.rows(); i++)
-			{
-				bias(i) = bias_distr(pseudorandom_generator);
-			}
-
-			w.push_back(weight);
-			vel_w.push_back(w_zero);
-
-			b.push_back(bias);
-			vel_b.push_back(b_zero);
-
-			//std::cout << randomWeightMatrix << "\n";
-
-			gradient_b.push_back(zero);
-			gradient_w.push_back(MatrixXf::Zero(layerNeurons[i], layerNeurons[i - 1]));
 		}
 	}
 
@@ -578,7 +653,6 @@ Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function
 {
 	for (int n : layer_args)
 		AddLayer(n);
-	finalize_init();
 }
 
 Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function,
@@ -587,7 +661,6 @@ Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function
 {
 	for (int n : layer_args)
 		AddLayer(n);
-	finalize_init();
 }
 
 Network::~Network() { delete cost_function; delete activation_function; }
@@ -632,6 +705,9 @@ int Network::Classify(MatrixXf& data, int x)
 
 void Network::Train(int batch_size, int num_epochs, float eta)
 {
+	this->batch_size = batch_size;
+	finalize_init();
+
 	std::cout << "[Network] Network has started training\n";
 	int layers = layerNeurons.size();
 
@@ -644,6 +720,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 	VectorXf y;
 
 	//Timer batch_time_begin, batch_time_end;
+	Timer training_timer = Timer("training_time");
 	while(epoch < num_epochs && !stop_training)
 	{
 		// De dataset moet gepermuteerd worden voor stochastic gradient descent,
@@ -654,7 +731,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		tr_labels = p * tr_labels; // Vermenigvuldig ook de labels met p.
 		//std::cout << "[Network|Training] Data matrix has been shuffled\n";
 		
-		Timer timer = Timer("epoch_time");
+		Timer epoch_timer = Timer("epoch_time");
 		std::cout << "\n";
 
 		// Doe Stochastic Gradient Descent
@@ -765,6 +842,7 @@ void TrainInParallel(int num_networks)
 {
 #pragma omp parallel num_threads(num_networks)
 	{
+		/*
 		srand(omp_get_thread_num() << 8);
 		float r = ala::GetUniformRandom<float>(0.001, 1);
 		std::cout << r << "\n";
@@ -777,6 +855,7 @@ void TrainInParallel(int num_networks)
 		network->SetOptimizer(network->momentum_optimizer, 0.9);
 		//network->SetDropout(0.5);
 		network->Train(10, 100, r);
+		*/
 	}
 }
 
@@ -806,15 +885,16 @@ int main(int argc, char **argv)
 		{
 			init_mnist();
 
-			Network* network = new Network({ 784, 32, 10 },
+			// >98%!
+			Network* network = new Network({ 784, 72, 10 },
 				loglikelihood_cost,
-				ReLU_activation,
+				sigmoid_activation,
 				softmax_activation);
 
-			network->SetRegularisation(L2_regularisation, 5.0);
+			network->SetRegularisation(L2_regularisation, 2.5);
 			network->SetOptimizer(network->momentum_optimizer, 0.9);
 			//network->SetDropout(0.5);
-			network->Train(10, 100, 0.01);
+			network->Train(10, 150, 0.085);
 
 #ifndef _DO_PARALLEL_TRAINING
 #define _DO_PARALLEL_TRAINING
