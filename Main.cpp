@@ -64,7 +64,7 @@ class Timer
 {
 public:
 	Timer(const std::string& _event_name)
-		: start_time(start_time = std::chrono::high_resolution_clock::now()),
+		: start_time(std::chrono::high_resolution_clock::now()),
 		event_name(_event_name) {}
 
 	~Timer()
@@ -75,7 +75,7 @@ public:
 			<< elapsed << "ms\n";
 	}
 private:
-	std::chrono::time_point<std::chrono::steady_clock> start_time;
+	const std::chrono::time_point<std::chrono::steady_clock> start_time;
 	const std::string event_name;
 };
 
@@ -493,10 +493,16 @@ public:
 	// Voor als het netwerk gevectoriseert is
 	std::vector<MatrixXf> A, B, Z, Deltas;
 
-	std::vector<VectorXf> gradient_b, vel_b;
-	std::vector<MatrixXf> gradient_w, vel_w;
+	std::vector<VectorXf> grad_b, cache_b, cache_b_2;
+	std::vector<MatrixXf> grad_w, cache_w, cache_w_2;
 
-	const enum optimizers{none, momentum_optimizer, adagrad_optimizer};
+	const enum optimizers{
+		none, 
+		momentum_optimizer, 
+		adagrad_optimizer,
+		adadelta_optimizer,
+		adam_optimizer
+	};
 
 private:
 	const CostFunction* cost_function;
@@ -507,7 +513,7 @@ private:
 	
 	float error = 0;
 	float gamma = 0, lambda = 0, dropout_p = 0.5;
-	const float epsilon = 1e-4;
+	const float epsilon = 1e-6;
 	bool stop_training = 0, do_regularisation = 0, do_dropout = 0, do_vectorization = 0;
 	int optimizer_id = 0, batch_size;
 };
@@ -522,10 +528,53 @@ void Network::ExpandData(int start, int end)
 	
 	std::random_device randomness_device{};
 	std::mt19937 pseudorandom_generator{ randomness_device() };
-	std::normal_distribution<float> distr(3.141 / 18, 3.141 / 30); // 1/18pi, 1/30pi voor 10 en 6 graden
+	std::normal_distribution<float> distr(3.14159 / 18, 3.14159 / 30); // 1/18pi, 1/30pi voor 10 en 6 graden
 	float phi = distr(pseudorandom_generator);
 
+	MatrixXf image = MatrixXf::Zero(28, 28);
+	Matrix3f kernel;
+	kernel << 1, 2, 1, 2, 4, 2, 1, 2, 1;
+	int dim = kernel.rows();
+	float factor = 1 / 16.0f;
+
+	// Gaussiaanse Blur
+	/*
 	#pragma omp parallel for num_threads(8)
+	for (int i = 0; i < (end - start) / 2; i++)
+	{
+		VectorXf x = tr_images.row(start + i);
+		VectorXf xPrime = VectorXf::Zero(784);
+		for (int xIndex = 0; xIndex < tr_images.cols(); xIndex++)
+		{
+			int u = xIndex % 28;
+			int v = std::floor(xIndex / 28);
+			float c = x(xIndex);
+			
+			image(u, v) = c;
+		}
+
+		for (int i = dim; i < 28 - dim; i++)
+		{
+			for (int j = dim; j < 28 - dim; j++)
+			{
+				xPrime(28 * j + i) = (kernel * image.block(i - 1, j - 1, dim, dim))
+					.sum() * factor;
+			}
+		}
+		
+		tr_images.row(tr_images.rows() - (end - start) + i) = xPrime;
+		tr_labels(tr_labels.rows() - (end - start) + i) = tr_labels(start + i);
+
+		//print_mnist_image(x);
+		//std::cout << "\n";
+		//print_mnist_image(xPrime);
+		//std::cout << "\n";
+	}
+	*/
+	
+	// Transformaties
+	phi = 3.141592f / 18.0f;
+	#pragma omp parallel for num_threads(1)
 	for (int i = 0; i < (end - start); i++)
 	{
 		// Converteer de afbeeldingsvector naar cartesische coördinaten, vermenigvuldig elk punt
@@ -533,22 +582,24 @@ void Network::ExpandData(int start, int end)
 		VectorXf x = tr_images.row(start + i);
 		VectorXf xPrime = VectorXf::Zero(784);
 		Matrix2f R;
-		R << cos(phi), -sin(phi), sin(phi), cos(phi);
+		R << cos(phi), sin(phi), -sin(phi), cos(phi);
 		for (int xIndex = 0; xIndex < 784; xIndex++)
 		{
 			if (x(xIndex) > 0)
 			{
 				// Phi(x_i)
-				Vector2f v((xIndex % 28) - 14, (28 - std::floor(xIndex / 28)) - 14);
+				Vector2f v((xIndex % 28), (28 - std::floor(xIndex / 28)));
 				float c = x(xIndex);
 
-				// RvA
+				// Rv
+				//std::cout << "v: \n" << v << "\n\n";
 				v = R * v;
+				//std::cout << "Rv: \n" << v << "\n\n";
 				
 				// {Phi}^{-1}(x_i)
-				if ((v(0) < 14 && v(0) >= -14) && (v(1) < 14 && v(1) >= -14))
+				if ((v(0) < 28 && v(0) >= 0) && (v(1) < 28 && v(1) >= 0))
 				{
-					int xPrimeIndex = std::floor((784 - (28 * (v(1) + 14))) + v(0) + 14);
+					int xPrimeIndex = std::floor((784 - (28 * v(1)))) + v(0);
 					xPrime(xPrimeIndex) = c;
 				}
 			}
@@ -584,9 +635,11 @@ void Network::UpdateDropoutMasks()
 	{
 		for (int i = 0; i < r[l].size(); i++)
 		{
-			r[l](i) = distr(pseudorandom_generator);
+			if(l != 0)
+				r[l](i) = distr(pseudorandom_generator);
+			else
+				r[l](i) = 1;
 		}
-		std::cout << r[l] << "\n\n";
 	}
 }
 
@@ -601,13 +654,16 @@ Network* Network::SetDropout(float _dropout_p)
 
 	for (int l = 0; l < layerNeurons.size() - 1; l++)
 	{
-		VectorXf dropout_masks = VectorXf::Constant(layerNeurons[l], 0);
+		VectorXf dropout_masks = VectorXf::Zero(layerNeurons[l]);
 		for (int i = 0; i < dropout_masks.rows(); i++)
 		{
-			dropout_masks(i) = distr(pseudorandom_generator) + epsilon;
+			if (l != 0)
+				dropout_masks(i) = distr(pseudorandom_generator) + epsilon;
+			else
+				dropout_masks(i) = 1;
 		}
 		r.push_back(dropout_masks);
-		std::cout << r[l] << "\n\n";
+		std::cout << r[l] << "\n";
 	}
 	return this;
 }
@@ -676,13 +732,15 @@ void Network::finalize_init()
 			}
 
 			w.push_back(weight);
-			vel_w.push_back(w_zero);
+			cache_w.push_back(w_zero);
+			cache_w_2.push_back(w_zero);
 
 			b.push_back(bias);
-			vel_b.push_back(b_zero);
+			cache_b.push_back(b_zero);
+			cache_b_2.push_back(b_zero);
 
-			gradient_b.push_back(b_zero);
-			gradient_w.push_back(w_zero);
+			grad_b.push_back(b_zero);
+			grad_w.push_back(w_zero);
 		}
 	}
 
@@ -767,7 +825,7 @@ void Network::Batch_FeedForward(int x, bool is_test)
 		{
 			if (do_dropout && l < layerNeurons.size() - 1)
 			{
-				Z[l] = (w[l - 1] * A[l - 1].cwiseProduct(r[l - 1])).colwise() + b[l - 1];
+				Z[l] = (w[l - 1] * (A[l - 1].array().colwise() * r[l - 1].array()).matrix()).colwise() + b[l - 1];
 			}
 			else
 			{
@@ -806,6 +864,11 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 	MatrixXf derivatives;
 	MatrixXf Y;
 
+	MatrixXf delta_w;
+	VectorXf delta_b;
+
+	//ExpandData(0, 30000);
+
 	//Timer batch_time_begin, batch_time_end;
 	Timer training_timer = Timer("training_time");
 	while(epoch < num_epochs && !stop_training)
@@ -817,7 +880,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		p.setIdentity();
 		std::random_shuffle(p.indices().data(), p.indices().data() + p.indices().size());
 		tr_images = p * tr_images;
-		tr_labels = p * tr_labels; // Vermenigvuldig ook de labels met p.
+		tr_labels = p * tr_labels;
 		//std::cout << "[Network|Training] Data matrix has been shuffled\n";
 		
 		Timer epoch_timer = Timer("epoch_time");
@@ -837,17 +900,19 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			// Backpropagation
 			for (int l = layers - 1; l > 0; l--)
 			{
+				std::cout << w[l - 1] << "\n\n";
 				activation_function->EvaluateDerivative(derivatives, Z[l]);
 				if (l == layers - 1)
 					Deltas[l - 1] = cost_function->GetDeltaL(A[layers - 1], Y, derivatives);
 				else
 					Deltas[l - 1] = (w[l].transpose() * Deltas[l]).cwiseProduct(derivatives);
-				gradient_b[l - 1] = Deltas[l - 1].rowwise().sum() / batch_size;
+
+				grad_b[l - 1] = Deltas[l - 1].rowwise().sum() / batch_size;
 				for (int i = 0; i < batch_size; i++)
 				{
-					gradient_w[l - 1] += Deltas[l - 1].col(i) * A[l - 1].col(i).transpose();
+					grad_w[l - 1] += Deltas[l - 1].col(i) * A[l - 1].col(i).transpose();
 				}
-				gradient_w[l - 1] /= batch_size;
+				grad_w[l - 1] /= batch_size;
 			}
 				
 			// Bereken de fout van deze batch.
@@ -855,11 +920,9 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			{
 				error = cost_function->GetCost(A[layers - 1], Y);
 				if (do_regularisation)
-				{
 					error += reg_term->Evaluate(lambda, tr_images.size(), w);
-				}
 			}
-			
+
 			// Update de waarden met de gradiënt
 			for (int l = 1; l < layers; l++)
 			{	
@@ -867,26 +930,70 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 				{
 				case momentum_optimizer:
 				{
-					vel_w[l - 1] = (gamma * vel_w[l - 1]) - (eta * gradient_w[l - 1]);
-					w[l - 1] += vel_w[l - 1];
+					cache_w[l - 1] = gamma * cache_w[l - 1] - eta * grad_w[l - 1];
+					w[l - 1] += cache_w[l - 1];
 
-					vel_b[l - 1] = (gamma * vel_b[l - 1]) - (eta * gradient_b[l - 1]);
-					b[l - 1] += vel_b[l - 1];
+					cache_b[l - 1] = gamma * cache_b[l - 1] - eta * grad_b[l - 1];
+					b[l - 1] += cache_b[l - 1];
 				}
 				break;
 				case adagrad_optimizer:
 				{
-					w[l - 1] -= (vel_w[l - 1].array() + epsilon).pow(-0.5).matrix().cwiseProduct(gradient_w[l - 1]) * eta;
-					b[l - 1] -= (vel_b[l - 1].array() + epsilon).pow(-0.5).matrix().cwiseProduct(gradient_b[l - 1]) * eta;
+					cache_w[l - 1] += grad_w[l - 1].cwiseProduct(grad_w[l - 1]);
+					cache_b[l - 1] += grad_b[l - 1].cwiseProduct(grad_b[l - 1]);
 
-					vel_w[l - 1] += gradient_w[l - 1].array().pow(2).matrix();
-					vel_b[l - 1] += gradient_b[l - 1].array().pow(2).matrix();
+					w[l - 1] -= eta * 
+						grad_w[l - 1].cwiseProduct((
+						(cache_w[l - 1].array() + epsilon)
+						.rsqrt()).matrix());
+
+					b[l - 1] -= eta * 
+						grad_b[l - 1].cwiseProduct((
+						(cache_b[l - 1].array() + epsilon)
+						.rsqrt()).matrix());
+				}
+				break;
+				case adadelta_optimizer:
+				{
+					//=====================//
+					cache_w[l - 1] =
+						gamma * cache_w[l - 1] +
+						(1 - gamma) * grad_w[l - 1].cwiseProduct(grad_w[l - 1]);
+
+					delta_w =
+						-(((cache_w_2[l - 1].array()) /
+						(cache_w[l - 1].array() + epsilon)) + epsilon)
+						.matrix().cwiseSqrt()
+						.cwiseProduct(grad_w[l - 1]);
+
+					cache_w_2[l - 1] = 
+						gamma * cache_w_2[l - 1] + 
+						(1 - gamma) * delta_w.cwiseProduct(delta_w);
+
+					w[l - 1] += delta_w;
+					//=====================//
+					cache_b[l - 1] =
+						gamma * cache_b[l - 1] +
+						(1 - gamma) * grad_b[l - 1].cwiseProduct(grad_b[l - 1]);
+
+					delta_b =
+						-(((cache_b_2[l - 1].array()) /
+						(cache_b[l - 1].array() + epsilon)) + epsilon)
+						.matrix().cwiseSqrt()
+						.cwiseProduct(grad_b[l - 1]);
+
+					cache_b_2[l - 1] = 
+						gamma * cache_b_2[l - 1] + 
+						(1 - gamma) * delta_b.cwiseProduct(delta_b);
+
+					b[l - 1] += delta_b;
+					//=====================//
 				}
 				break;
 				case none:
 				{
-					w[l - 1] -= eta * gradient_w[l - 1];
-					b[l - 1] -= eta * gradient_b[l - 1];
+					w[l - 1] -= eta * grad_w[l - 1];
+					b[l - 1] -= eta * grad_b[l - 1];
 				}
 				break;
 				}
@@ -895,8 +1002,8 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 				{
 					w[l - 1] -= eta * reg_term->EvaluateDerivative(lambda, tr_images.rows(), w[l - 1]);
 				}
-				gradient_w[l - 1].fill(0);
-				gradient_b[l - 1].fill(0);
+				grad_w[l - 1].fill(0);
+				grad_b[l - 1].fill(0);
 			}
 
 			if (set_index % 10000 == 0)
@@ -915,12 +1022,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		std::cout << "[Network|Training] Epochs trained: " << ++epoch << "\n";
 		std::cout << "[Network|Training] Accuracy: " << recognised << " / " << size << "\n";
 
-		srand(time(NULL));
-		int start = rand() % 60000;
-
-		if(epoch <= 4)
-			//ExpandData(start, start + 10000);
-
 		if (do_dropout)
 			UpdateDropoutMasks();
 	}
@@ -935,20 +1036,7 @@ void TrainInParallel(int num_networks)
 {
 #pragma omp parallel num_threads(num_networks)
 	{
-		/*
-		srand(omp_get_thread_num() << 8);
-		float r = ala::GetUniformRandom<float>(0.001, 1);
-		std::cout << r << "\n";
-		Network* network = new Network({ 784, 32, 10 },
-			loglikelihood_cost,
-			ReLU_activation,
-			softmax_activation);
-		
-		network->SetRegularisation(L2_regularisation, 5.0);
-		network->SetOptimizer(network->momentum_optimizer, 0.9);
-		//network->SetDropout(0.5);
-		network->Train(10, 100, r);
-		*/
+	
 	}
 }
 
@@ -956,6 +1044,7 @@ int main(int argc, char **argv)
 {
 	//Eigen::initParallel();
 	omp_set_num_threads(8);
+	Eigen::setNbThreads(0);
 	std::cout << "[Debug] Running Eigen on " << Eigen::nbThreads() << " threads\n";
 	state = window.loading_state;
 	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
@@ -984,10 +1073,10 @@ int main(int argc, char **argv)
 				sigmoid_activation,
 				softmax_activation);
 
-			//network->SetRegularisation(L2_regularisation, 3.0);
+			network->SetRegularisation(L2_regularisation, 6.0);
 			network->SetOptimizer(network->momentum_optimizer, 0.9);
-			network->SetDropout(0.5);
-			network->Train(10, 200, 0.085);
+			//network->SetDropout(0.5);
+			network->Train(10, 400, 0.085);
 
 #ifndef _DO_PARALLEL_TRAINING
 #define _DO_PARALLEL_TRAINING
