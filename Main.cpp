@@ -30,6 +30,8 @@
 #include <fstream>
 #include <iomanip>
 #include <random>
+#include <windows.h>
+#include <ctime>
 
 // Hier is de visualisatie-component van het project, alhoewel het niets
 // toevoegt aan de theorie achter het profielwerkstuk kunt u het natuurlijk
@@ -60,10 +62,17 @@ const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 void print_mnist_image(VectorXf& data);
 void init_mnist();
 
+void InitFileSystem()
+{
+	CreateDirectory("../data", NULL);
+	CreateDirectory("../data/graphdata", NULL);
+	CreateDirectory("../data/networkdata", NULL);
+}
+
 class Timer
 {
 public:
-	Timer(const std::string& _event_name)
+	Timer(const char* _event_name)
 		: start_time(std::chrono::high_resolution_clock::now()),
 		event_name(_event_name) {}
 
@@ -76,7 +85,7 @@ public:
 	}
 private:
 	const std::chrono::time_point<std::chrono::steady_clock> start_time;
-	const std::string event_name;
+	const char* event_name;
 };
 
 // Nee, met "EigenVector" bedoel ik geen eigenvector.
@@ -283,7 +292,7 @@ public:
 
 	float Evaluate(float x) const
 	{
-		return std::max(0.0f, x);
+		return max(0.0f, x);
 	}
 
 	float EvaluateDerivative(float x) const
@@ -475,6 +484,7 @@ public:
 	Network* AddLayer(int n_neurons);
 	Network* SetRegularisation(RegTerm* reg_term, float lambda);
 	Network* SetDropout(float dropout_p);
+	Network* SetAccuracyTracking();
 	void UpdateDropoutMasks();
 	Network* SetOptimizer(int optimizer_id, float gamma);
 
@@ -505,18 +515,55 @@ public:
 	};
 
 private:
+	template<typename T>
+	void WriteToCSV(std::vector<T>& data);
+
 	const CostFunction* cost_function;
 	const ActivationFunction* activation_function, * L_activation_function;
 	RegTerm* reg_term;
 
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
+	std::vector<int> accuracy_buffer;
 	
 	float error = 0;
 	float gamma = 0, lambda = 0, dropout_p = 0.5;
 	const float epsilon = 1e-6;
 	bool stop_training = 0, do_regularisation = 0, do_dropout = 0, do_vectorization = 0;
+	bool track_accuracy = 0;
 	int optimizer_id = 0, batch_size;
 };
+
+template<typename T>
+void Network::WriteToCSV(std::vector<T>& data)
+{
+	time_t rawtime;
+	struct tm* timeinfo;
+	char buffer[80];
+	time(&rawtime);
+	timeinfo = localtime(&rawtime);
+	strftime(buffer, sizeof(buffer), 
+		"-%d-%m-%Y_%H.%M.%S", timeinfo);
+	std::string time_str(buffer);
+	std::string path("../data/graphdata/accuracy_epochs");
+	path.append(time_str);
+	path.append(".csv");
+	std::cout << path << "\n";
+
+	std::ofstream file(path);
+	file << "Epoch" << "," << "Accuracy" << std::endl;
+	for (int i = 0; i < data.size(); i++)
+	{
+		file << i << "," << data[i] << std::endl;
+	}
+	file.close();
+	std::cout << "Successfully wrote data to csv\n";
+}
+
+Network* Network::SetAccuracyTracking()
+{
+	track_accuracy = 1;
+	return this;
+}
 
 void Network::ExpandData(int start, int end)
 {
@@ -618,6 +665,7 @@ void Network::ExpandData(int start, int end)
 MatrixXf Network::GetExpectedLabels(int index)
 {
 	MatrixXf Y(10, batch_size);
+
 	for (int i = 0; i < batch_size; i++)
 	{
 		Y.col(i) = GetExpectedLabel(index + i);
@@ -900,7 +948,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			// Backpropagation
 			for (int l = layers - 1; l > 0; l--)
 			{
-				std::cout << w[l - 1] << "\n\n";
 				activation_function->EvaluateDerivative(derivatives, Z[l]);
 				if (l == layers - 1)
 					Deltas[l - 1] = cost_function->GetDeltaL(A[layers - 1], Y, derivatives);
@@ -1016,32 +1063,30 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 
 		// Check progress
 		int size = ts_images.rows();
-		float recognised = 0;
+		float accuracy = 0;
 		for (int i = 0; i < size; i++)
-			recognised += (Classify(ts_images, i) == ts_labels[i]);
+			accuracy += (Classify(ts_images, i) == ts_labels[i]);
 		std::cout << "[Network|Training] Epochs trained: " << ++epoch << "\n";
-		std::cout << "[Network|Training] Accuracy: " << recognised << " / " << size << "\n";
+		std::cout << "[Network|Training] Accuracy: " << accuracy << " / " << size << "\n";
+
+		// Bewaar accuracy en epoch, om later te schrijven naar een csv-bestand.
+		if (track_accuracy)
+		{
+			accuracy_buffer.push_back(accuracy);
+		}
 
 		if (do_dropout)
 			UpdateDropoutMasks();
 	}
-	//std::cout << "[Network] Final error is:" << error << "\n";
-	std::cout << "[Network] Network has successfully been trained\n";
-}
-
-// Laad het neurale netwerk; hierin worden alle parameters van het netwerk
-// vastgesteld. Hoeveelheid lagen, hoeveelheid neuronen in elke laag,
-// activatiefunctie, et cetera.
-void TrainInParallel(int num_networks)
-{
-#pragma omp parallel num_threads(num_networks)
-	{
 	
-	}
+	WriteToCSV(accuracy_buffer);
+	std::cout << "[Network] Network has successfully been trained\n";
 }
 
 int main(int argc, char **argv)
 {
+	InitFileSystem();
+
 	//Eigen::initParallel();
 	omp_set_num_threads(8);
 	Eigen::setNbThreads(0);
@@ -1072,11 +1117,11 @@ int main(int argc, char **argv)
 				loglikelihood_cost,
 				sigmoid_activation,
 				softmax_activation);
-
 			network->SetRegularisation(L2_regularisation, 6.0);
 			network->SetOptimizer(network->momentum_optimizer, 0.9);
 			//network->SetDropout(0.5);
-			network->Train(10, 400, 0.085);
+			network->SetAccuracyTracking();
+			network->Train(10, 2, 0.085);
 
 #ifndef _DO_PARALLEL_TRAINING
 #define _DO_PARALLEL_TRAINING
