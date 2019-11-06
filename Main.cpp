@@ -486,6 +486,7 @@ public:
 	Network* SetDropout(float dropout_p);
 	Network* SetAccuracyTracking();
 	void UpdateDropoutMasks();
+	Network* SetOptimizer(int optimizer_id, float gamma, float beta);
 	Network* SetOptimizer(int optimizer_id, float gamma);
 
 	void ExpandData(int start, int end);
@@ -526,7 +527,7 @@ private:
 	std::vector<int> accuracy_buffer;
 	
 	float error = 0;
-	float gamma = 0, lambda = 0, dropout_p = 0.5;
+	float gamma = 0, beta = 0, lambda = 0, dropout_p = 0.5;
 	const float epsilon = 1e-6;
 	bool stop_training = 0, do_regularisation = 0, do_dropout = 0, do_vectorization = 0;
 	bool track_accuracy = 0;
@@ -552,9 +553,7 @@ void Network::WriteToCSV(std::vector<T>& data)
 	std::ofstream file(path);
 	file << "Epoch" << "," << "Accuracy" << std::endl;
 	for (int i = 0; i < data.size(); i++)
-	{
-		file << i << "," << data[i] << std::endl;
-	}
+		file  << i << " " << "," << data[i] << std::endl;
 	file.close();
 	std::cout << "Successfully wrote data to csv\n";
 }
@@ -720,6 +719,14 @@ Network* Network::SetOptimizer(int _optimizer_id, float _gamma)
 {
 	optimizer_id = _optimizer_id;
 	gamma = _gamma;
+	return this;
+}
+
+Network* Network::SetOptimizer(int _optimizer_id, float _gamma, float _beta)
+{
+	optimizer_id = _optimizer_id;
+	gamma = _gamma;
+	beta = _beta;
 	return this;
 }
 
@@ -1008,15 +1015,14 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 						(1 - gamma) * grad_w[l - 1].cwiseProduct(grad_w[l - 1]);
 
 					delta_w =
-						-(((cache_w_2[l - 1].array()) /
-						(cache_w[l - 1].array() + epsilon)) + epsilon)
-						.matrix().cwiseSqrt()
-						.cwiseProduct(grad_w[l - 1]);
+						-((cache_w_2[l - 1].array() + epsilon).cwiseSqrt() * 
+						(cache_w[l - 1].array() + epsilon).array().rsqrt())
+						.matrix().cwiseProduct(grad_w[l - 1]);
 
 					cache_w_2[l - 1] = 
 						gamma * cache_w_2[l - 1] + 
 						(1 - gamma) * delta_w.cwiseProduct(delta_w);
-
+					
 					w[l - 1] += delta_w;
 					//=====================//
 					cache_b[l - 1] =
@@ -1024,16 +1030,43 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 						(1 - gamma) * grad_b[l - 1].cwiseProduct(grad_b[l - 1]);
 
 					delta_b =
-						-(((cache_b_2[l - 1].array()) /
-						(cache_b[l - 1].array() + epsilon)) + epsilon)
-						.matrix().cwiseSqrt()
-						.cwiseProduct(grad_b[l - 1]);
+						-((cache_b_2[l - 1].array() + epsilon).cwiseSqrt() *
+						(cache_b[l - 1].array() + epsilon).array().rsqrt())
+						.matrix().cwiseProduct(grad_b[l - 1]);
 
 					cache_b_2[l - 1] = 
 						gamma * cache_b_2[l - 1] + 
 						(1 - gamma) * delta_b.cwiseProduct(delta_b);
 
 					b[l - 1] += delta_b;
+					//=====================//
+				}
+				break;
+				case adam_optimizer:
+				{
+					//=====================//
+					int t = set_index + 1;
+					cache_w[l - 1] = gamma * cache_w[l - 1] + (1 - gamma) * grad_w[l - 1];
+
+					cache_w_2[l - 1] = beta * cache_w_2[l - 1] + 
+						(1 - beta) * (grad_w[l - 1].cwiseProduct(grad_w[l - 1]));
+
+					MatrixXf c_cache_w = cache_w[l - 1] / (1.0f - std::pow(gamma, t));
+					MatrixXf c_cache_w_2 = cache_w_2[l - 1] / (1.0f - std::pow(beta, t));
+
+					w[l - 1] -= eta * c_cache_w.cwiseProduct((c_cache_w_2.array()
+						.rsqrt() + epsilon).matrix());
+					//=====================//
+					cache_b[l - 1] = gamma * cache_b[l - 1] + (1 - gamma) * grad_b[l - 1];
+
+					cache_b_2[l - 1] = beta * cache_b_2[l - 1] +
+						(1 - beta) * (grad_b[l - 1].cwiseProduct(grad_b[l - 1]));
+
+					MatrixXf c_cache_b = cache_b[l - 1] / (1.0f - std::pow(gamma, t));
+					MatrixXf c_cache_b_2 = cache_b_2[l - 1] / (1.0f - std::pow(beta, t));
+
+					b[l - 1] -= eta * c_cache_b.cwiseProduct((c_cache_b_2.array()
+						.rsqrt() + epsilon).matrix());
 					//=====================//
 				}
 				break;
@@ -1118,10 +1151,10 @@ int main(int argc, char **argv)
 				sigmoid_activation,
 				softmax_activation);
 			network->SetRegularisation(L2_regularisation, 6.0);
-			network->SetOptimizer(network->momentum_optimizer, 0.9);
+			network->SetOptimizer(network->adadelta_optimizer, 0.9, 0.9);
 			//network->SetDropout(0.5);
 			network->SetAccuracyTracking();
-			network->Train(10, 2, 0.085);
+			network->Train(10, 150, 0.085);
 
 #ifndef _DO_PARALLEL_TRAINING
 #define _DO_PARALLEL_TRAINING
