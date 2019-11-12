@@ -5,6 +5,7 @@
 // Programmeergedeelte / deelvraag 4
 //=======================================================================
 
+
 // Een geoptimalizeerde library voor lineaire algebra; want 200000 matrixvermenigvuldigingen
 // is VEEL.
 #include <Eigen/Dense>
@@ -583,8 +584,6 @@ void Network::ExpandData(int start, int end)
 	int dim = kernel.rows();
 	float factor = 1 / 16.0f;
 
-	// Gaussiaanse Blur
-	/*
 	#pragma omp parallel for num_threads(8)
 	for (int i = 0; i < (end - start) / 2; i++)
 	{
@@ -616,7 +615,6 @@ void Network::ExpandData(int start, int end)
 		//print_mnist_image(xPrime);
 		//std::cout << "\n";
 	}
-	*/
 	
 	// Transformaties
 	phi = 3.141592f / 18.0f;
@@ -677,7 +675,7 @@ void Network::UpdateDropoutMasks()
 	std::random_device randomness_device{};
 	std::mt19937 pseudorandom_generator{ randomness_device() };
 	std::bernoulli_distribution distr(dropout_p);
-
+	
 	for (int l = 0; l < layerNeurons.size() - 1; l++)
 	{
 		for (int i = 0; i < r[l].size(); i++)
@@ -1014,25 +1012,21 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 						gamma * cache_w[l - 1] +
 						(1 - gamma) * grad_w[l - 1].cwiseProduct(grad_w[l - 1]);
 
-					delta_w =
-						-((cache_w_2[l - 1].array() + epsilon).cwiseSqrt() * 
-						(cache_w[l - 1].array() + epsilon).array().rsqrt())
-						.matrix().cwiseProduct(grad_w[l - 1]);
+					delta_w = -Eigen::sqrt((cache_w_2[l - 1].array() + epsilon)
+						/ (cache_w[l - 1].array() + epsilon)).matrix().cwiseProduct(grad_w[l - 1]);
 
-					cache_w_2[l - 1] = 
-						gamma * cache_w_2[l - 1] + 
+					cache_w_2[l - 1] =
+						gamma * cache_w_2[l - 1] +
 						(1 - gamma) * delta_w.cwiseProduct(delta_w);
-					
+
 					w[l - 1] += delta_w;
 					//=====================//
 					cache_b[l - 1] =
 						gamma * cache_b[l - 1] +
 						(1 - gamma) * grad_b[l - 1].cwiseProduct(grad_b[l - 1]);
 
-					delta_b =
-						-((cache_b_2[l - 1].array() + epsilon).cwiseSqrt() *
-						(cache_b[l - 1].array() + epsilon).array().rsqrt())
-						.matrix().cwiseProduct(grad_b[l - 1]);
+					delta_b = -Eigen::sqrt((cache_b_2[l - 1].array() + epsilon)
+						/ (cache_b[l - 1].array() + epsilon)).matrix().cwiseProduct(grad_b[l - 1]);
 
 					cache_b_2[l - 1] = 
 						gamma * cache_b_2[l - 1] + 
@@ -1053,7 +1047,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 
 					MatrixXf c_cache_w = cache_w[l - 1] / (1.0f - std::pow(gamma, t));
 					MatrixXf c_cache_w_2 = cache_w_2[l - 1] / (1.0f - std::pow(beta, t));
-
+					
 					w[l - 1] -= eta * c_cache_w.cwiseProduct((c_cache_w_2.array()
 						.rsqrt() + epsilon).matrix());
 					//=====================//
@@ -1155,7 +1149,7 @@ int main(int argc, char **argv)
 			//network->SetDropout(0.5);
 			network->SetAccuracyTracking();
 			network->Train(10, 150, 0.085);
-
+			
 #ifndef _DO_PARALLEL_TRAINING
 #define _DO_PARALLEL_TRAINING
 #endif
