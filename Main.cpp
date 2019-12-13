@@ -2,12 +2,11 @@
 // Finn van Vlaanderen
 // A6A
 // Profielwerkstuk "Neurale Netwerken"
-// Programmeergedeelte / deelvraag 4
+// Programmeergedeelte
 //=======================================================================
 
 
-// Een geoptimalizeerde library voor lineaire algebra; want 200000 matrixvermenigvuldigingen
-// is VEEL.
+// Een geoptimalizeerde library voor lineaire algebra
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include <omp.h>
@@ -44,9 +43,6 @@ typedef Eigen::Matrix<uint, Dynamic, 1> VectorXui;
 
 using namespace Eigen;
 
-static VectorXui tr_labels, ts_labels; // Labels
-static Eigen::MatrixXf tr_images, ts_images; // Afbeeldingen
-
 static int state;
 
 const int im_width = 28;
@@ -54,14 +50,29 @@ const int im_width = 28;
 const int win_height = 600, win_width = 800;
 const char* win_title = "Een interessante titel";
 
-static visual::Window window = visual::Window(win_title, win_width, win_height);
+//static visual::Window window = visual::Window(win_title, win_width, win_height);
 
 const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
 const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
 const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
+const float epsilon = 1e-6;
+
+struct Dataset
+{
+	Dataset() {}
+
+	Dataset(MatrixXf _training_images, VectorXui _training_labels,
+		MatrixXf _test_images, VectorXui _test_labels)
+		: training_images(_training_images), training_labels(_training_labels),
+		test_images(_test_images), test_labels(_test_labels) {}
+
+	MatrixXf training_images, test_images;
+	VectorXui training_labels, test_labels;
+};
+
 void print_mnist_image(VectorXf& data);
-void init_mnist();
+Dataset init_mnist();
 
 void InitFileSystem()
 {
@@ -106,21 +117,24 @@ MatrixXf ConvertToEigenMatrix(std::vector<std::vector<float>> data)
 
 // Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
 // matrices (afbeeldingen).
-void init_mnist()
+Dataset init_mnist()
 {
 	std::cout << "[MNIST] Parsing MNIST data..\n";
-	auto dataset = mnist::read_dataset();
+	auto data = mnist::read_dataset();
 	std::cout << "[MNIST] Successfully parsed MNIST data\n";
 
 	std::cout << "[MNIST] Converting images..\n";
-	ts_images = ConvertToEigenMatrix(dataset.test_images);
-	tr_images = ConvertToEigenMatrix(dataset.training_images);
+	MatrixXf ts_images = ConvertToEigenMatrix(data.test_images);
+	MatrixXf tr_images = ConvertToEigenMatrix(data.training_images);
 	std::cout << "[MNIST] Successfully converted images\n";
 
 	std::cout << "[MNIST] Converting labels..\n";
-	ts_labels = ConvertToEigenVector(dataset.test_labels);
-	tr_labels = ConvertToEigenVector(dataset.training_labels);
+	VectorXui ts_labels = ConvertToEigenVector(data.test_labels);
+	VectorXui tr_labels = ConvertToEigenVector(data.training_labels);
 	std::cout << "[MNIST] Successfully converted labels\n";
+
+	Dataset dataset(tr_images, tr_labels, ts_images, ts_labels);
+	return dataset;
 }
 
 // Print een afbeelding uit de mnist-dataset in de console, 
@@ -194,11 +208,11 @@ public:
 	virtual MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w) = 0;
 };
 
-class L2Regularisation : public RegTerm
+class L2Regulariser : public RegTerm
 {
 public:
 	
-	L2Regularisation()
+	L2Regulariser()
 		: RegTerm("L2"){}
 
 	float Evaluate(float lambda, int n, std::vector<MatrixXf>& w)
@@ -219,10 +233,10 @@ public:
 	}
 };
 
-class L1Regularisation : public RegTerm
+class L1Regulariser : public RegTerm
 {
 public:
-	L1Regularisation()
+	L1Regulariser()
 		: RegTerm("L1") {}
 
 	float Evaluate(float lambda, int n, std::vector<MatrixXf>& w)
@@ -284,12 +298,51 @@ public:
 	}
 };
 
+class TanhActivation : public ActivationFunction
+{
+public:
+
+	TanhActivation()
+		: ActivationFunction("tanh") {}
+
+	float Evaluate(float x) const
+	{
+		return 2 / (1 + std::exp(-2 * x)) - 1;
+	}
+
+	float EvaluateDerivative(float x) const
+	{
+		float temp = Evaluate(x);
+		return 1 - (temp * temp);
+	}
+
+	void Evaluate(VectorXf& container, VectorXf& x) const
+	{
+		container = 2 / (1 + Eigen::exp(-2 * x.array()).array()) - 1;
+	}
+	void EvaluateDerivative(VectorXf& container, VectorXf& x) const
+	{
+		VectorXf temp = 2 / (1 + Eigen::exp(-2 * x.array()).array()) - 1;
+		container = 1 - (temp.cwiseProduct(temp)).array();
+	}
+
+	void Evaluate(MatrixXf& container, MatrixXf& x) const
+	{
+		container = 2 / (1 + Eigen::exp(-2 * x.array()).array()) - 1;
+	}
+	void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const
+	{
+		MatrixXf temp = 2 / (1 + Eigen::exp(-2 * x.array()).array()) - 1;
+		container = 1 - (temp.cwiseProduct(temp)).array();
+	}
+};
+
 class ReLUActivation : public ActivationFunction
 {
 public:
 
 	ReLUActivation()
-		: ActivationFunction("ReLU") {}
+		: ActivationFunction("relu") {}
 
 	float Evaluate(float x) const
 	{
@@ -319,6 +372,44 @@ public:
 		container = x.array().cwiseMax(0) / x.array();
 	}
 };
+
+class LReLUActivation : public ActivationFunction
+{
+public:
+
+	LReLUActivation()
+		: ActivationFunction("leaky relu") {}
+
+	float Evaluate(float x) const
+	{
+		return (x > 0 ?  x : 0.01f * x);
+	}
+
+	float EvaluateDerivative(float x) const
+	{
+		return x > 0 ? 1 : -0.01f;
+	}
+
+	void Evaluate(VectorXf& container, VectorXf& x) const
+	{
+		container = x.cwiseMax(0.01f * x);
+	}
+	void EvaluateDerivative(VectorXf& container, VectorXf& x) const
+	{
+		container = x.cwiseSign().cwiseMax(0.01f);
+	}
+
+	void Evaluate(MatrixXf& container, MatrixXf& x) const
+	{
+		container = x.cwiseMax(0.01f * x);
+	}
+	void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const
+	{
+		container = x.cwiseSign().cwiseMax(0.01);
+	}
+};
+
+int t = 0;
 
 class SoftmaxActivation : public ActivationFunction
 {
@@ -352,12 +443,13 @@ public:
 	void Evaluate(MatrixXf& container, MatrixXf& x) const
 	{
 		MatrixXf expx = x.array().exp();
-		container = expx.array().rowwise() / expx.colwise().sum().array();
+		container = expx.array().rowwise() / (expx.colwise().sum().array() + epsilon);
 	}
+
 	void EvaluateDerivative(MatrixXf& container, MatrixXf& x) const
 	{
 		MatrixXf expx = x.array().exp();
-		expx = expx.array() / expx.colwise().sum().array();
+		expx = expx.array().rowwise() / (expx.colwise().sum().array() + epsilon);
 		container = expx.cwiseProduct(MatrixXf::Constant(x.rows(), x.cols(), 1) - expx);
 	}
 };
@@ -460,11 +552,13 @@ public:
 const CostFunction* quadratic_cost = new QuadraticCost();
 const CostFunction* crossentropy_cost = new CrossentropyCost();
 const CostFunction* loglikelihood_cost = new LoglikelihoodCost();
-const ActivationFunction* ReLU_activation = new ReLUActivation();
+const ActivationFunction* relu_activation = new ReLUActivation();
+const ActivationFunction* lrelu_activation = new LReLUActivation();
 const ActivationFunction* sigmoid_activation = new SigmoidActivation();
 const ActivationFunction* softmax_activation = new SoftmaxActivation();
-RegTerm* L2_regularisation = new L2Regularisation();
-RegTerm* L1_regularisation = new L1Regularisation();
+const ActivationFunction* tanh_activation = new TanhActivation();
+RegTerm* L2_regulariser = new L2Regulariser();
+RegTerm* L1_regulariser = new L1Regulariser();
 
 // De implementatie van het neurale netwerk. 
 class Network
@@ -473,6 +567,7 @@ public:
 	Network(std::vector<int> layer_args, const CostFunction* cost_function, const ActivationFunction* activation_function);
 	Network(std::vector<int> layer_args, const CostFunction* cost_function, 
 		const ActivationFunction* activation_function, const ActivationFunction* L_activation_function);
+	Network(Dataset data);
 	~Network();
 
 	friend class CostFunction;
@@ -480,15 +575,16 @@ public:
 
 	void FeedForward(int x, bool is_test);
 	void Batch_FeedForward(int x, bool is_test);
-	int Classify(MatrixXf& data, int x);
+	int Classify(int x);
 
-	Network* AddLayer(int n_neurons);
-	Network* SetRegularisation(RegTerm* reg_term, float lambda);
+	Network* AddLayer(int n_neurons, const ActivationFunction* _activation_function);
+	Network* SetRegulariser(RegTerm* reg_term, float lambda);
 	Network* SetDropout(float dropout_p);
 	Network* SetAccuracyTracking();
 	void UpdateDropoutMasks();
-	Network* SetOptimizer(int optimizer_id, float gamma, float beta);
-	Network* SetOptimizer(int optimizer_id, float gamma);
+	Network* SetOptimizer(int optimizer_id, float beta1, float beta2);
+	Network* SetOptimizer(int optimizer_id, float beta1);
+	Network* SetCostFunction(const CostFunction* _cost_function);
 
 	void ExpandData(int start, int end);
 
@@ -513,7 +609,8 @@ public:
 		momentum_optimizer, 
 		adagrad_optimizer,
 		adadelta_optimizer,
-		adam_optimizer
+		adam_optimizer,
+		rmsprop_optimizer
 	};
 
 private:
@@ -521,19 +618,26 @@ private:
 	void WriteToCSV(std::vector<T>& data);
 
 	const CostFunction* cost_function;
-	const ActivationFunction* activation_function, * L_activation_function;
+	std::vector<const ActivationFunction*> activation_functions;
 	RegTerm* reg_term;
+
+	Dataset dataset;
 
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 	std::vector<int> accuracy_buffer;
 	
 	float error = 0;
-	float gamma = 0, beta = 0, lambda = 0, dropout_p = 0.5;
-	const float epsilon = 1e-6;
-	bool stop_training = 0, do_regularisation = 0, do_dropout = 0, do_vectorization = 0;
+	float beta1 = 0, beta2 = 0, lambda = 0, dropout_p = 0.5;
+	bool stop_training = 0, do_regularisation = 0, do_dropout = 0;
 	bool track_accuracy = 0;
 	int optimizer_id = 0, batch_size;
 };
+
+Network* Network::SetCostFunction(const CostFunction* _cost_function)
+{
+	this->cost_function = _cost_function;
+	return this;
+}
 
 template<typename T>
 void Network::WriteToCSV(std::vector<T>& data)
@@ -569,27 +673,38 @@ void Network::ExpandData(int start, int end)
 {
 	Timer expand_timer = Timer("expansion_time");
 
+	int oldSize = dataset.training_images.rows();
+
 	Eigen::initParallel();
-	tr_images.conservativeResize(tr_images.rows() + (end - start), NoChange);
-	tr_labels.conservativeResize(tr_labels.rows() + (end - start));
+	if (end > dataset.training_images.rows())
+	{
+		dataset.training_images.conservativeResize(end, NoChange);
+		dataset.training_labels.conservativeResize(end);
+	}
 	
 	std::random_device randomness_device{};
 	std::mt19937 pseudorandom_generator{ randomness_device() };
 	std::normal_distribution<float> distr(3.14159 / 18, 3.14159 / 30); // 1/18pi, 1/30pi voor 10 en 6 graden
+	std::normal_distribution<float> distr2(0, 1);
 	float phi = distr(pseudorandom_generator);
 
 	MatrixXf image = MatrixXf::Zero(28, 28);
+
+	// Gaussiaanse convolutiekernel
 	Matrix3f kernel;
 	kernel << 1, 2, 1, 2, 4, 2, 1, 2, 1;
+
 	int dim = kernel.rows();
 	float factor = 1 / 16.0f;
 
+	phi = 3.141592f / 18.0f;
 	#pragma omp parallel for num_threads(8)
-	for (int i = 0; i < (end - start) / 2; i++)
+	for (int i = start; i < end; i++)
 	{
-		VectorXf x = tr_images.row(start + i);
+		VectorXf x = dataset.training_images.row(i % oldSize);
 		VectorXf xPrime = VectorXf::Zero(784);
-		for (int xIndex = 0; xIndex < tr_images.cols(); xIndex++)
+		
+		for (int xIndex = 0; xIndex < dataset.training_images.cols(); xIndex++)
 		{
 			int u = xIndex % 28;
 			int v = std::floor(xIndex / 28);
@@ -597,50 +712,37 @@ void Network::ExpandData(int start, int end)
 			
 			image(u, v) = c;
 		}
-
-		for (int i = dim; i < 28 - dim; i++)
+		for (int j = dim; j < 28 - dim; j++)
 		{
-			for (int j = dim; j < 28 - dim; j++)
+			for (int k = dim; k < 28 - dim; k++)
 			{
-				xPrime(28 * j + i) = (kernel * image.block(i - 1, j - 1, dim, dim))
+				xPrime(28 * k + j) = (kernel * image.block(j - 1, k - 1, dim, dim))
 					.sum() * factor;
 			}
 		}
-		
-		tr_images.row(tr_images.rows() - (end - start) + i) = xPrime;
-		tr_labels(tr_labels.rows() - (end - start) + i) = tr_labels(start + i);
-
-		//print_mnist_image(x);
-		//std::cout << "\n";
-		//print_mnist_image(xPrime);
-		//std::cout << "\n";
-	}
 	
-	// Transformaties
-	phi = 3.141592f / 18.0f;
-	#pragma omp parallel for num_threads(1)
-	for (int i = 0; i < (end - start); i++)
-	{
+		/*
 		// Converteer de afbeeldingsvector naar cartesische coördinaten, vermenigvuldig elk punt
 		// met een rotatiematrix en converteer terug naar de afbeeldingsvector.
-		VectorXf x = tr_images.row(start + i);
-		VectorXf xPrime = VectorXf::Zero(784);
 		Matrix2f R;
 		R << cos(phi), sin(phi), -sin(phi), cos(phi);
+
+		Vector2f transform;
+		transform << 1, 1;
+		//std::cout << transform << "\n\n";
+
 		for (int xIndex = 0; xIndex < 784; xIndex++)
 		{
 			if (x(xIndex) > 0)
 			{
-				// Phi(x_i)
+				// Psi(x_i)
 				Vector2f v((xIndex % 28), (28 - std::floor(xIndex / 28)));
 				float c = x(xIndex);
 
-				// Rv
-				//std::cout << "v: \n" << v << "\n\n";
-				v = R * v;
-				//std::cout << "Rv: \n" << v << "\n\n";
+				// Pas de transformatie toe
+				v = v + transform;
 				
-				// {Phi}^{-1}(x_i)
+				// Psi^-1(x_i)
 				if ((v(0) < 28 && v(0) >= 0) && (v(1) < 28 && v(1) >= 0))
 				{
 					int xPrimeIndex = std::floor((784 - (28 * v(1)))) + v(0);
@@ -648,14 +750,16 @@ void Network::ExpandData(int start, int end)
 				}
 			}
 		}
-
-		tr_images.row(tr_images.rows() - (end - start) + i) = xPrime;
-		tr_labels(tr_labels.rows() - (end - start) + i) = tr_labels(start + i);
-
-		//print_mnist_image(x);
-		//std::cout << "\n";
-		//print_mnist_image(xPrime);
-		//std::cout << "\n";
+		*/
+		if (i > oldSize)
+		{
+			dataset.training_images.row(i) = xPrime;
+			dataset.training_images.row(i) = dataset.training_labels.row(i % oldSize);
+		}
+		else
+		{
+			dataset.training_images.row(i) = xPrime;
+		}
 	}
 }
 
@@ -680,10 +784,13 @@ void Network::UpdateDropoutMasks()
 	{
 		for (int i = 0; i < r[l].size(); i++)
 		{
+			/*
 			if(l != 0)
 				r[l](i) = distr(pseudorandom_generator);
 			else
 				r[l](i) = 1;
+			*/
+			r[l](i) = distr(pseudorandom_generator);
 		}
 	}
 }
@@ -713,22 +820,22 @@ Network* Network::SetDropout(float _dropout_p)
 	return this;
 }
 
-Network* Network::SetOptimizer(int _optimizer_id, float _gamma)
+Network* Network::SetOptimizer(int _optimizer_id, float _beta1)
 {
 	optimizer_id = _optimizer_id;
-	gamma = _gamma;
+	beta1 = _beta1;
 	return this;
 }
 
-Network* Network::SetOptimizer(int _optimizer_id, float _gamma, float _beta)
+Network* Network::SetOptimizer(int _optimizer_id, float _beta1, float _beta2)
 {
 	optimizer_id = _optimizer_id;
-	gamma = _gamma;
-	beta = _beta;
+	beta1 = _beta1;
+	beta2 = _beta2;
 	return this;
 }
 
-Network* Network::SetRegularisation(RegTerm* _reg_term, float _lambda)
+Network* Network::SetRegulariser(RegTerm* _reg_term, float _lambda)
 {
 	reg_term = _reg_term;
 	lambda = _lambda;
@@ -738,7 +845,7 @@ Network* Network::SetRegularisation(RegTerm* _reg_term, float _lambda)
 
 VectorXf Network::GetExpectedLabel(int index)
 {
-	return expectedResults[tr_labels[index]];
+	return expectedResults[dataset.training_labels(index)];
 }
 
 void Network::finalize_init()
@@ -808,35 +915,48 @@ void Network::finalize_init()
 
 // Voeg een laag toe aan het netwerk.
 // \param n_neurons Aantal neuronen van de verborgen laag.
-Network* Network::AddLayer(int n_neurons)
+Network* Network::AddLayer(int n_neurons, const ActivationFunction* _activation_function)
 {
 	layerNeurons.push_back(n_neurons);
-	std::cout << "[Network|Init] Adding layer with " << n_neurons << " neurons..\n";
+	activation_functions.push_back(_activation_function);
+	std::cout << "[Network|Init] Adding " << _activation_function->GetName() << " layer with " << n_neurons << " neurons..\n";
 	return this;
 }
+
+Network::Network(Dataset _data) 
+: dataset(_data) {}
 
 // \param input_neurons Aantal neuronen in de inputlaag (aantal pixels in afbeelding)
 // \param output_neurons Aantal neuronen in de outputlaag (aantal verschillende te herkennen getallen)
 Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function, const ActivationFunction* _activation_function)
-	: cost_function(_cost_function), activation_function(_activation_function), L_activation_function(_activation_function)
+	: cost_function(_cost_function)
 {
 	for (int n : layer_args)
-		AddLayer(n);
+		AddLayer(n, _activation_function);
 }
 
 Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function,
 	const ActivationFunction* _activation_function, const ActivationFunction* _L_activation_function)
-	: cost_function(_cost_function), activation_function(_activation_function), L_activation_function(_L_activation_function)
+	: cost_function(_cost_function)
 {
-	for (int n : layer_args)
-		AddLayer(n);
+	for (int i = 0; i < layer_args.size(); i++)
+	{
+		if (i == layer_args.size() - 1)
+		{
+			AddLayer(layer_args[i], _L_activation_function);
+		}
+		else
+		{
+			AddLayer(layer_args[i], _activation_function);
+		}
+	}
 }
 
-Network::~Network() { delete cost_function; delete activation_function; }
+Network::~Network() { delete cost_function; for (auto f : activation_functions) delete f; }
 
 void Network::FeedForward(int x, bool is_test)
 {
-	a[0] = (is_test ? ts_images.row(x) : tr_images.row(x));
+	a[0] = (is_test ? dataset.test_images.row(x) : dataset.training_images.row(x));
 	for (int l = 1; l < layerNeurons.size(); l++)
 	{
 		if (do_dropout && is_test)
@@ -845,7 +965,7 @@ void Network::FeedForward(int x, bool is_test)
 		}
 		else
 		{
-			if (do_dropout && l < layerNeurons.size() - 1)
+			if (do_dropout)
 			{
 				z[l] = (w[l - 1] * a[l - 1].cwiseProduct(r[l - 1])) + b[l - 1];
 			}
@@ -855,10 +975,7 @@ void Network::FeedForward(int x, bool is_test)
 			}
 		}
 
-		if (l == layerNeurons.size() - 1)
-			L_activation_function->Evaluate(a[l], z[l]);
-		else
-			activation_function->Evaluate(a[l], z[l]);
+		activation_functions[l]->Evaluate(a[l], z[l]);
 	}
 }
 
@@ -866,7 +983,7 @@ void Network::Batch_FeedForward(int x, bool is_test)
 {
 	for (int i = 0; i < batch_size; i++)
 	{
-		A[0].col(i) = tr_images.row(x + i);
+		A[0].col(i) = dataset.training_images.row(x + i);
 	}
 	for (int l = 1; l < layerNeurons.size(); l++)
 	{
@@ -876,7 +993,7 @@ void Network::Batch_FeedForward(int x, bool is_test)
 		}
 		else
 		{
-			if (do_dropout && l < layerNeurons.size() - 1)
+			if (do_dropout && l != layerNeurons.size() - 1)
 			{
 				Z[l] = (w[l - 1] * (A[l - 1].array().colwise() * r[l - 1].array()).matrix()).colwise() + b[l - 1];
 			}
@@ -886,14 +1003,11 @@ void Network::Batch_FeedForward(int x, bool is_test)
 			}
 		}
 
-		if (l == layerNeurons.size() - 1)
-			L_activation_function->Evaluate(A[l], Z[l]);
-		else
-			activation_function->Evaluate(A[l], Z[l]);
+		activation_functions[l]->Evaluate(A[l], Z[l]);
 	}
 }
 
-int Network::Classify(MatrixXf& data, int x)
+int Network::Classify(int x)
 {
 	FeedForward(x, 1);
 	VectorXf::Index maxIndex;
@@ -920,7 +1034,9 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 	MatrixXf delta_w;
 	VectorXf delta_b;
 
-	//ExpandData(0, 30000);
+	// Breid de dataset kunstmatig uit; transformeer afbeeldingen x\in[0,10000], vergroot de dataset met 
+	// 10k en vul de nieuwe ruimte met de getransformeerde afbeeldingen.
+	//ExpandData(60000, 70000);
 
 	//Timer batch_time_begin, batch_time_end;
 	Timer training_timer = Timer("training_time");
@@ -929,18 +1045,29 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		// De dataset moet gepermuteerd worden voor stochastic gradient descent,
 		// hiervoor maken we een willekeurige permutatiematrix p om de datamatrix mee te vermenigvuldigen.
 		//std::cout << "[Network|Training] Shuffling data matrix..\n";
-		Eigen::PermutationMatrix<Dynamic, Dynamic> p(tr_images.rows());
+		Eigen::PermutationMatrix<Dynamic, Dynamic> p(dataset.training_images.rows());
 		p.setIdentity();
 		std::random_shuffle(p.indices().data(), p.indices().data() + p.indices().size());
-		tr_images = p * tr_images;
-		tr_labels = p * tr_labels;
+		dataset.training_images = p * dataset.training_images;
+		dataset.training_labels = p * dataset.training_labels;
 		//std::cout << "[Network|Training] Data matrix has been shuffled\n";
+
+		for (int l = 1; l < layers; l++)
+		{
+			cache_w[l - 1].fill(0);
+			cache_w_2[l - 1].fill(0);
+			cache_b[l - 1].fill(0);
+			cache_b_2[l - 1].fill(0);
+		}
 		
 		Timer epoch_timer = Timer("epoch_time");
 		std::cout << "\n";
+
 		// Doe Stochastic Gradient Descent
-		for (int set_index = 0; set_index + batch_size < tr_images.rows(); set_index += batch_size)
+		for (int set_index = 0; set_index + batch_size < dataset.training_images.rows(); set_index += batch_size)
 		{
+			t = (set_index / batch_size) + 1;
+
 			if (set_index % 10000 == 0)
 			{
 				error = 0;
@@ -953,13 +1080,14 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			// Backpropagation
 			for (int l = layers - 1; l > 0; l--)
 			{
-				activation_function->EvaluateDerivative(derivatives, Z[l]);
+				activation_functions[l]->EvaluateDerivative(derivatives, Z[l]);
 				if (l == layers - 1)
 					Deltas[l - 1] = cost_function->GetDeltaL(A[layers - 1], Y, derivatives);
 				else
 					Deltas[l - 1] = (w[l].transpose() * Deltas[l]).cwiseProduct(derivatives);
-
+				
 				grad_b[l - 1] = Deltas[l - 1].rowwise().sum() / batch_size;
+
 				for (int i = 0; i < batch_size; i++)
 				{
 					grad_w[l - 1] += Deltas[l - 1].col(i) * A[l - 1].col(i).transpose();
@@ -972,112 +1100,168 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			{
 				error = cost_function->GetCost(A[layers - 1], Y);
 				if (do_regularisation)
-					error += reg_term->Evaluate(lambda, tr_images.size(), w);
+					error += reg_term->Evaluate(lambda, dataset.training_images.size(), w);
 			}
 
 			// Update de waarden met de gradiënt
-			for (int l = 1; l < layers; l++)
+			for (int l = 0; l < layers - 1; l++)
 			{	
 				switch (optimizer_id)
 				{
 				case momentum_optimizer:
 				{
-					cache_w[l - 1] = gamma * cache_w[l - 1] - eta * grad_w[l - 1];
-					w[l - 1] += cache_w[l - 1];
+					cache_w[l] = beta1 * cache_w[l] + eta * grad_w[l];
+					w[l] -= cache_w[l];
 
-					cache_b[l - 1] = gamma * cache_b[l - 1] - eta * grad_b[l - 1];
-					b[l - 1] += cache_b[l - 1];
+					cache_b[l] = beta1 * cache_b[l] + eta * grad_b[l];
+					b[l] -= cache_b[l];
 				}
 				break;
 				case adagrad_optimizer:
 				{
-					cache_w[l - 1] += grad_w[l - 1].cwiseProduct(grad_w[l - 1]);
-					cache_b[l - 1] += grad_b[l - 1].cwiseProduct(grad_b[l - 1]);
+					cache_w[l] += grad_w[l].cwiseProduct(grad_w[l]);
+					cache_b[l] += grad_b[l].cwiseProduct(grad_b[l]);
 
-					w[l - 1] -= eta * 
-						grad_w[l - 1].cwiseProduct((
-						(cache_w[l - 1].array() + epsilon)
+					w[l] -= eta * 
+						grad_w[l].cwiseProduct((
+						(cache_w[l].array() + epsilon)
 						.rsqrt()).matrix());
 
-					b[l - 1] -= eta * 
-						grad_b[l - 1].cwiseProduct((
-						(cache_b[l - 1].array() + epsilon)
+					b[l] -= eta * 
+						grad_b[l].cwiseProduct((
+						(cache_b[l].array() + epsilon)
 						.rsqrt()).matrix());
+				}
+				break;
+				case rmsprop_optimizer:
+				{
+					/* 
+					Ik weet nu dat:
+					De cache is op t-1 nog niet NaN, zelfde geldt voor rsqrt.
+					Op t is de cache wel NaN.
+					We kunnen concluderen dat de omslag zich moet bevinden 
+					in de cache-update op tijdstip t, en NIET in de wortel, aangezien de cache EN
+					de wortel NaN zijn op t. 
+					Conclusie: De gradiënt nullt. 
+					*/
+
+					/*
+					if (epoch >= 2 && t > 3000)
+					{
+						std::cout << "cache voor update:\n" << cache_b[l] << "\n\n";
+						std::cout << "gradient:\n" << grad_b[l] << "\n\n";
+					}
+					*/
+
+					cache_w[l] = beta1 * cache_w[l] + (1 - beta1) 
+						* (grad_w[l].cwiseProduct(grad_w[l]));
+
+					cache_b[l] = beta1 * cache_b[l] + (1 - beta1) 
+						* (grad_b[l].cwiseProduct(grad_b[l]));
+
+					/*
+					if (epoch >= 2 && t > 3000)
+					{
+						std::cout << "cache na update:\n" << cache_b[l] << "\n\n";
+					}
+					*/
+
+					delta_w = eta * grad_w[l].cwiseProduct((
+						cache_w[l].array() + epsilon)
+						.rsqrt().matrix());
+
+					delta_b = eta * grad_b[l].cwiseProduct((
+						cache_b[l].array() + epsilon)
+						.rsqrt().matrix());
+
+					w[l] -= delta_w;
+
+					b[l] -= delta_b;
+
+					/*
+					if (epoch >= 3)
+					{
+						std::cout << "noemer: " << cache_b[l].array() + epsilon << "\n\n";
+						std::cout << "rsqrt: " << (cache_b[l].array() + epsilon).rsqrt() << "\n\n";
+					}
+
+					if (isnan((cache_b[l].array() + epsilon).rsqrt().minCoeff()))
+					{
+						std::cout << "sqrt oops op t=" << t << "\n";
+					}
+					*/
 				}
 				break;
 				case adadelta_optimizer:
 				{
 					//=====================//
-					cache_w[l - 1] =
-						gamma * cache_w[l - 1] +
-						(1 - gamma) * grad_w[l - 1].cwiseProduct(grad_w[l - 1]);
+					cache_w[l] =
+						beta1 * cache_w[l] +
+						(1 - beta1) * grad_w[l].cwiseProduct(grad_w[l]);
 
-					delta_w = -Eigen::sqrt((cache_w_2[l - 1].array() + epsilon)
-						/ (cache_w[l - 1].array() + epsilon)).matrix().cwiseProduct(grad_w[l - 1]);
+					delta_w = -Eigen::sqrt((cache_w_2[l].array() + epsilon)
+						/ (cache_w[l].array() + epsilon)).matrix().cwiseProduct(grad_w[l]);
 
-					cache_w_2[l - 1] =
-						gamma * cache_w_2[l - 1] +
-						(1 - gamma) * delta_w.cwiseProduct(delta_w);
+					cache_w_2[l] =
+						beta1 * cache_w_2[l] +
+						(1 - beta1) * delta_w.cwiseProduct(delta_w);
 
-					w[l - 1] += delta_w;
+					w[l] += delta_w;
 					//=====================//
-					cache_b[l - 1] =
-						gamma * cache_b[l - 1] +
-						(1 - gamma) * grad_b[l - 1].cwiseProduct(grad_b[l - 1]);
+					cache_b[l] =
+						beta1 * cache_b[l] +
+						(1 - beta1) * grad_b[l].cwiseProduct(grad_b[l]);
 
-					delta_b = -Eigen::sqrt((cache_b_2[l - 1].array() + epsilon)
-						/ (cache_b[l - 1].array() + epsilon)).matrix().cwiseProduct(grad_b[l - 1]);
+					delta_b = -Eigen::sqrt((cache_b_2[l].array() + epsilon)
+						/ (cache_b[l].array() + epsilon)).matrix().cwiseProduct(grad_b[l]);
 
-					cache_b_2[l - 1] = 
-						gamma * cache_b_2[l - 1] + 
-						(1 - gamma) * delta_b.cwiseProduct(delta_b);
+					cache_b_2[l] = 
+						beta1 * cache_b_2[l] + 
+						(1 - beta1) * delta_b.cwiseProduct(delta_b);
 
-					b[l - 1] += delta_b;
+					b[l] += delta_b;
 					//=====================//
 				}
 				break;
 				case adam_optimizer:
 				{
 					//=====================//
-					int t = set_index + 1;
-					cache_w[l - 1] = gamma * cache_w[l - 1] + (1 - gamma) * grad_w[l - 1];
+					cache_w[l] = beta1 * cache_w[l] + (1 - beta1) * grad_w[l];
 
-					cache_w_2[l - 1] = beta * cache_w_2[l - 1] + 
-						(1 - beta) * (grad_w[l - 1].cwiseProduct(grad_w[l - 1]));
+					cache_w_2[l] = beta2 * cache_w_2[l] + 
+						(1 - beta2) * (grad_w[l].cwiseProduct(grad_w[l]));
 
-					MatrixXf c_cache_w = cache_w[l - 1] / (1.0f - std::pow(gamma, t));
-					MatrixXf c_cache_w_2 = cache_w_2[l - 1] / (1.0f - std::pow(beta, t));
-					
-					w[l - 1] -= eta * c_cache_w.cwiseProduct((c_cache_w_2.array()
-						.rsqrt() + epsilon).matrix());
+					MatrixXf mw = cache_w[l] / (1.0f - std::pow(beta1, t));
+					MatrixXf vw = cache_w_2[l] / (1.0f - std::pow(beta2, t));
+
+					w[l] -= eta * mw.cwiseProduct((vw.array() + epsilon).rsqrt().matrix());
 					//=====================//
-					cache_b[l - 1] = gamma * cache_b[l - 1] + (1 - gamma) * grad_b[l - 1];
+					cache_b[l] = beta1 * cache_b[l] + (1 - beta1) * grad_b[l];
 
-					cache_b_2[l - 1] = beta * cache_b_2[l - 1] +
-						(1 - beta) * (grad_b[l - 1].cwiseProduct(grad_b[l - 1]));
+					cache_b_2[l] = beta2 * cache_b_2[l] +
+						(1 - beta2) * (grad_b[l].cwiseProduct(grad_b[l]));
 
-					MatrixXf c_cache_b = cache_b[l - 1] / (1.0f - std::pow(gamma, t));
-					MatrixXf c_cache_b_2 = cache_b_2[l - 1] / (1.0f - std::pow(beta, t));
+					MatrixXf mb = cache_b[l] / (1.0f - std::pow(beta1, t));
+					MatrixXf vb = cache_b_2[l] / (1.0f - std::pow(beta2, t));
 
-					b[l - 1] -= eta * c_cache_b.cwiseProduct((c_cache_b_2.array()
-						.rsqrt() + epsilon).matrix());
+					b[l] -= eta * mb.cwiseProduct((vb.array() + epsilon).rsqrt().matrix());
 					//=====================//
 				}
 				break;
 				case none:
 				{
-					w[l - 1] -= eta * grad_w[l - 1];
-					b[l - 1] -= eta * grad_b[l - 1];
+					w[l] -= eta * grad_w[l];
+					b[l] -= eta * grad_b[l];
 				}
 				break;
 				}
 
 				if (do_regularisation)
 				{
-					w[l - 1] -= eta * reg_term->EvaluateDerivative(lambda, tr_images.rows(), w[l - 1]);
+					w[l] -= eta * reg_term->EvaluateDerivative(lambda, dataset.training_images.rows(), w[l]);
 				}
-				grad_w[l - 1].fill(0);
-				grad_b[l - 1].fill(0);
+				grad_w[l].fill(0);
+				grad_b[l].fill(0);
 			}
 
 			if (set_index % 10000 == 0)
@@ -1089,10 +1273,10 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		}
 
 		// Check progress
-		int size = ts_images.rows();
+		int size = dataset.test_images.rows();
 		float accuracy = 0;
 		for (int i = 0; i < size; i++)
-			accuracy += (Classify(ts_images, i) == ts_labels[i]);
+			accuracy += (Classify(i) == dataset.test_labels(i));
 		std::cout << "[Network|Training] Epochs trained: " << ++epoch << "\n";
 		std::cout << "[Network|Training] Accuracy: " << accuracy << " / " << size << "\n";
 
@@ -1118,50 +1302,43 @@ int main(int argc, char **argv)
 	omp_set_num_threads(8);
 	Eigen::setNbThreads(0);
 	std::cout << "[Debug] Running Eigen on " << Eigen::nbThreads() << " threads\n";
-	state = window.loading_state;
-	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
+	//state = window.loading_state;
+	//visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
 
-	while (!window.isClosed())
-	{
-		if (state == window.explore_state)
-		{
+	//while (true /*!window.isClosed()*/)
+	//{
+		//if (state == window.explore_state)
+		//{
 			// TODO: doe dit op een competente manier
-			grid.draw();
+			//grid.draw();
 			//int n = network->Classify(ts_images, grid.dataMatrix_row);
 			//std::cout << "Het netwerk denkt dat dit een " << n << " is.\n";
-			grid.pollEvents();
-		}
+			//grid.pollEvents();
+		//}
 
-		window.pollEvents();
-		window.clear();
+		//window.pollEvents();
+		//window.clear();
 
-		if (state == window.loading_state)
-		{
-			init_mnist();
+		//if (state == window.loading_state)
+		//{
+			//Dataset dataset = init_mnist();
 
-			// >98%!
-			Network* network = new Network({ 784, 64, 10 },
-				loglikelihood_cost,
-				sigmoid_activation,
-				softmax_activation);
-			network->SetRegularisation(L2_regularisation, 6.0);
-			network->SetOptimizer(network->adadelta_optimizer, 0.9, 0.9);
-			//network->SetDropout(0.5);
+			Network* network = new Network(init_mnist());
+			network->SetCostFunction(loglikelihood_cost);
+			network->AddLayer(784, lrelu_activation);
+			network->AddLayer(32, lrelu_activation);
+			network->AddLayer(32, lrelu_activation);
+			network->AddLayer(10, softmax_activation);
+			network->SetRegulariser(L2_regulariser, 6.0);
+			network->SetOptimizer(network->rmsprop_optimizer, 0.9, 0.9);
 			network->SetAccuracyTracking();
-			network->Train(10, 150, 0.085);
-			
-#ifndef _DO_PARALLEL_TRAINING
-#define _DO_PARALLEL_TRAINING
-#endif
 
-#ifdef _DO_PARALLEL_TRAINING
-			//TrainInParallel(2);
-#endif
+			network->Train(10, 100, 0.01);
 
 			//grid.init_data();
 
-			state = window.explore_state;
-		}
-	}
+			//state = window.explore_state;
+		//}
+	//}
 	return 0;
 }
