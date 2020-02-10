@@ -43,6 +43,9 @@ typedef Eigen::Matrix<uint, Dynamic, 1> VectorXui;
 
 using namespace Eigen;
 
+static VectorXui tr_labels, ts_labels; // Labels
+static Eigen::MatrixXf tr_images, ts_images; // Afbeeldingen
+
 static int state;
 
 const int im_width = 28;
@@ -50,29 +53,16 @@ const int im_width = 28;
 const int win_height = 600, win_width = 800;
 const char* win_title = "Een interessante titel";
 
-//static visual::Window window = visual::Window(win_title, win_width, win_height);
+static visual::Window window = visual::Window(win_title, win_width, win_height);
 
 const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
 const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
 const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
-const float epsilon = 1e-6;
-
-struct Dataset
-{
-	Dataset() {}
-
-	Dataset(MatrixXf _training_images, VectorXui _training_labels,
-		MatrixXf _test_images, VectorXui _test_labels)
-		: training_images(_training_images), training_labels(_training_labels),
-		test_images(_test_images), test_labels(_test_labels) {}
-
-	MatrixXf training_images, test_images;
-	VectorXui training_labels, test_labels;
-};
+const float epsilon = 1e-3;
 
 void print_mnist_image(VectorXf& data);
-Dataset init_mnist();
+void init_mnist();
 
 void InitFileSystem()
 {
@@ -117,24 +107,21 @@ MatrixXf ConvertToEigenMatrix(std::vector<std::vector<float>> data)
 
 // Lees de MNIST-dataset en bewaar alle data in vectoren (labels) en
 // matrices (afbeeldingen).
-Dataset init_mnist()
+void init_mnist()
 {
 	std::cout << "[MNIST] Parsing MNIST data..\n";
-	auto data = mnist::read_dataset();
+	auto dataset = mnist::read_dataset();
 	std::cout << "[MNIST] Successfully parsed MNIST data\n";
 
 	std::cout << "[MNIST] Converting images..\n";
-	MatrixXf ts_images = ConvertToEigenMatrix(data.test_images);
-	MatrixXf tr_images = ConvertToEigenMatrix(data.training_images);
+	ts_images = ConvertToEigenMatrix(dataset.test_images);
+	tr_images = ConvertToEigenMatrix(dataset.training_images);
 	std::cout << "[MNIST] Successfully converted images\n";
 
 	std::cout << "[MNIST] Converting labels..\n";
-	VectorXui ts_labels = ConvertToEigenVector(data.test_labels);
-	VectorXui tr_labels = ConvertToEigenVector(data.training_labels);
+	ts_labels = ConvertToEigenVector(dataset.test_labels);
+	tr_labels = ConvertToEigenVector(dataset.training_labels);
 	std::cout << "[MNIST] Successfully converted labels\n";
-
-	Dataset dataset(tr_images, tr_labels, ts_images, ts_labels);
-	return dataset;
 }
 
 // Print een afbeelding uit de mnist-dataset in de console, 
@@ -567,7 +554,7 @@ public:
 	Network(std::vector<int> layer_args, const CostFunction* cost_function, const ActivationFunction* activation_function);
 	Network(std::vector<int> layer_args, const CostFunction* cost_function, 
 		const ActivationFunction* activation_function, const ActivationFunction* L_activation_function);
-	Network(Dataset data);
+	Network();
 	~Network();
 
 	friend class CostFunction;
@@ -575,11 +562,14 @@ public:
 
 	void FeedForward(int x, bool is_test);
 	void Batch_FeedForward(int x, bool is_test);
-	int Classify(int x);
+	int Classify(MatrixXf& data, int x);
+	int SimpleClassify(VectorXf x, int l);
+	VectorXf SimpleFeedForward(VectorXf x, int l);
 
 	Network* AddLayer(int n_neurons, const ActivationFunction* _activation_function);
 	Network* SetRegulariser(RegTerm* reg_term, float lambda);
-	Network* SetDropout(float dropout_p);
+	Network* SetDropout(std::vector<float> p_d);
+	Network* SetAccuracyTracking(std::string name);
 	Network* SetAccuracyTracking();
 	void UpdateDropoutMasks();
 	Network* SetOptimizer(int optimizer_id, float beta1, float beta2);
@@ -596,10 +586,11 @@ public:
 	void Train(int batch_size, int epochs, float eta);
 
 	std::vector<MatrixXf> w;
-	std::vector<VectorXf> a, b, z, deltas, expectedResults, r;
+	std::vector<VectorXf> a, b, z, delta, expectedResults, xi;
+	std::vector<float> p_d;
 
 	// Voor als het netwerk gevectoriseert is
-	std::vector<MatrixXf> A, B, Z, Deltas;
+	std::vector<MatrixXf> A, B, Z, Delta;
 
 	std::vector<VectorXf> grad_b, cache_b, cache_b_2;
 	std::vector<MatrixXf> grad_w, cache_w, cache_w_2;
@@ -621,16 +612,16 @@ private:
 	std::vector<const ActivationFunction*> activation_functions;
 	RegTerm* reg_term;
 
-	Dataset dataset;
-
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
 	std::vector<int> accuracy_buffer;
 	
 	float error = 0;
-	float beta1 = 0, beta2 = 0, lambda = 0, dropout_p = 0.5;
-	bool stop_training = 0, do_regularisation = 0, do_dropout = 0;
+	float beta1 = 0, beta2 = 0, lambda = 0;
+	bool stop_training = 0, do_weightdecay = 0, do_dropout = 0;
 	bool track_accuracy = 0;
 	int optimizer_id = 0, batch_size;
+
+	std::string acc_graph_name;
 };
 
 Network* Network::SetCostFunction(const CostFunction* _cost_function)
@@ -642,16 +633,23 @@ Network* Network::SetCostFunction(const CostFunction* _cost_function)
 template<typename T>
 void Network::WriteToCSV(std::vector<T>& data)
 {
-	time_t rawtime;
-	struct tm* timeinfo;
-	char buffer[80];
-	time(&rawtime);
-	timeinfo = localtime(&rawtime);
-	strftime(buffer, sizeof(buffer), 
-		"-%d-%m-%Y_%H.%M.%S", timeinfo);
-	std::string time_str(buffer);
-	std::string path("../data/graphdata/accuracy_epochs");
-	path.append(time_str);
+	std::string path("../data/graphdata/accuracy_epochs-");
+	if (acc_graph_name.empty())
+	{
+		time_t rawtime;
+		struct tm* timeinfo;
+		char buffer[80];
+		time(&rawtime);
+		timeinfo = localtime(&rawtime);
+		strftime(buffer, sizeof(buffer),
+			"%d-%m-%Y_%H.%M.%S", timeinfo);
+		std::string time_str(buffer);
+		path.append(time_str);
+	}
+	else
+	{
+		path.append(acc_graph_name);
+	}
 	path.append(".csv");
 	std::cout << path << "\n";
 
@@ -665,30 +663,81 @@ void Network::WriteToCSV(std::vector<T>& data)
 
 Network* Network::SetAccuracyTracking()
 {
+	return SetAccuracyTracking("");
+}
+
+Network* Network::SetAccuracyTracking(std::string name)
+{
 	track_accuracy = 1;
+	acc_graph_name = name;
 	return this;
+}
+
+void bilerp(MatrixXf& A, int x1, int y1, int x2, int y2)
+{
+	float factorx1, factorx2;
+
+	float P1 = A(y1, x1), P2, P3, P4;
+
+	if (y2 >= A.rows() || y2 < 0)
+	{
+		P3 = 0;
+	}
+	else
+	{
+		P3 = A(y2, x1);
+	}
+
+	if (x2 >= A.cols() || x2 < 0)
+	{
+		P2 = 0;
+	}
+	else
+	{
+		P2 = A(y1, x2);
+	}
+	
+	if (y2 >= A.rows() || x2 >= A.cols() || y2 < 0 || x2 < 0)
+	{
+		P4 = 0;
+	}
+	else
+	{
+		P4 = A(y2, x2);
+	}
+
+	for (float x = x1; x < x2; x++)
+	{
+		factorx1 = (x2 - x) / (x2 - x1);
+		factorx2 = (x - x1) / (x2 - x1);
+		for (float y = y1; y < y2; y++)
+		{
+			if (!(x >= A.cols() || y >= A.rows()))
+			{
+				A(y, x) = ((y2 - y) / (y2 - y1)) * (factorx1 * P1 + factorx2 * P2)
+					+ ((y - y1) / (y2 - y1)) * (factorx1 * P3 + factorx2 * P4);
+			}
+		}
+	}
 }
 
 void Network::ExpandData(int start, int end)
 {
 	Timer expand_timer = Timer("expansion_time");
 
-	int oldSize = dataset.training_images.rows();
+	int oldSize = tr_images.rows();
 
 	Eigen::initParallel();
-	if (end > dataset.training_images.rows())
+	if (end > tr_images.rows())
 	{
-		dataset.training_images.conservativeResize(end, NoChange);
-		dataset.training_labels.conservativeResize(end);
+		tr_images.conservativeResize(end, NoChange);
+		tr_labels.conservativeResize(end);
 	}
 	
 	std::random_device randomness_device{};
-	std::mt19937 pseudorandom_generator{ randomness_device() };
-	std::normal_distribution<float> distr(3.14159 / 18, 3.14159 / 30); // 1/18pi, 1/30pi voor 10 en 6 graden
+	std::mt19937 gen{ randomness_device() };
 	std::normal_distribution<float> distr2(0, 1);
-	float phi = distr(pseudorandom_generator);
-
-	MatrixXf image = MatrixXf::Zero(28, 28);
+	std::uniform_int_distribution<> unituniform(-1, 1);
 
 	// Gaussiaanse convolutiekernel
 	Matrix3f kernel;
@@ -697,14 +746,87 @@ void Network::ExpandData(int start, int end)
 	int dim = kernel.rows();
 	float factor = 1 / 16.0f;
 
-	phi = 3.141592f / 18.0f;
-	#pragma omp parallel for num_threads(8)
-	for (int i = start; i < end; i++)
+	std::srand(time(NULL));
+	
+	float alpha = 1.0;
+	auto delta_x = [&](int u, int v) { return unituniform(gen); };
+	auto delta_y = [&](int u, int v) { return unituniform(gen); };
+
+	//#pragma omp parallel for num_threads(8)
+	for (int i = start + 1; i < end; i++)
 	{
-		VectorXf x = dataset.training_images.row(i % oldSize);
+		VectorXf x = tr_images.row(i % oldSize);
 		VectorXf xPrime = VectorXf::Zero(784);
 		
-		for (int xIndex = 0; xIndex < dataset.training_images.cols(); xIndex++)
+		MatrixXf X = MatrixXf::Zero(28, 28);
+		MatrixXf XPrime = X;
+
+		//print_mnist_image(x);
+
+		// Phi^-1
+		for (int j = 0; j < tr_images.cols(); j++)
+		{
+			int u = j % 28;
+			int v = std::floor(j / 28);
+			X(v, u) = x(j);
+		}
+
+		//std::cout << X.cwiseSign() << "\n\n";
+
+		for (int u = 0; u < X.cols(); u++)
+		{
+			for (int v = 0; v < X.rows(); v++)
+			{
+				if (X(v, u) != 0)
+				{
+					int vPrime = std::round(v + delta_y(u, v));
+					int uPrime = std::round(u + delta_x(u, v));
+					if (!(vPrime > 27 || uPrime > 27 || vPrime < 0 || uPrime < 0))
+					{
+						XPrime(vPrime, uPrime) = X(v, u);
+					}
+					//bilerp(X, u, v, uPrime, vPrime);
+				}
+			}
+		}
+		/*
+		for (int u = 0; u < XPrime.cols(); u++)
+		{
+			for (int v = 0; v < XPrime.rows(); v++)
+			{
+				// Interpolatie
+				if (XPrime(v, u) == 0 && !((v + 1 >= 28 || u + 1 >= 28) || (v - 1 < 0 || u - 1 < 0)))
+				{
+					float R1 = (XPrime(v - 1, u - 1) + XPrime(v - 1, u + 1)) / 2;
+					float R2 = (XPrime(v + 1, u - 1) + XPrime(v + 1, u + 1)) / 2;
+					XPrime(v, u) = std::round((R1 + R2) / 2);
+				}
+			}
+		}
+		*/
+
+		//std::cout << XPrime.cwiseSign() << "\n\n";
+
+		// Phi
+		for (int j = 0; j < tr_images.cols(); j++)
+		{
+			xPrime(j) = XPrime(std::floor(j / XPrime.cols()), j % XPrime.cols());
+		}
+
+		//print_mnist_image(xPrime);
+
+		if (i > oldSize)
+		{
+			tr_images.row(i) = xPrime;
+			tr_labels.row(i) = tr_labels.row(i % oldSize);
+		}
+		else
+		{
+			tr_images.row(i) = xPrime;
+		}
+
+		/*
+		for (int xIndex = 0; xIndex < tr_images.cols(); xIndex++)
 		{
 			int u = xIndex % 28;
 			int v = std::floor(xIndex / 28);
@@ -751,17 +873,8 @@ void Network::ExpandData(int start, int end)
 			}
 		}
 		*/
-		if (i > oldSize)
-		{
-			dataset.training_images.row(i) = xPrime;
-			dataset.training_images.row(i) = dataset.training_labels.row(i % oldSize);
-		}
-		else
-		{
-			dataset.training_images.row(i) = xPrime;
-		}
 	}
-}
+ }
 
 MatrixXf Network::GetExpectedLabels(int index)
 {
@@ -778,44 +891,35 @@ void Network::UpdateDropoutMasks()
 {
 	std::random_device randomness_device{};
 	std::mt19937 pseudorandom_generator{ randomness_device() };
-	std::bernoulli_distribution distr(dropout_p);
 	
 	for (int l = 0; l < layerNeurons.size() - 1; l++)
 	{
-		for (int i = 0; i < r[l].size(); i++)
+		std::bernoulli_distribution distr(p_d[l]);
+		for (int i = 0; i < xi[l].size(); i++)
 		{
-			/*
-			if(l != 0)
-				r[l](i) = distr(pseudorandom_generator);
-			else
-				r[l](i) = 1;
-			*/
-			r[l](i) = distr(pseudorandom_generator);
+			xi[l](i) = distr(pseudorandom_generator);
 		}
 	}
 }
 
-Network* Network::SetDropout(float _dropout_p)
+Network* Network::SetDropout(std::vector<float> _p_d)
 {
 	do_dropout = 1;
-	dropout_p = _dropout_p;
+	for (float p : _p_d)
+		p_d.push_back(p);
 
 	std::random_device randomness_device{};
 	std::mt19937 pseudorandom_generator{ randomness_device() };
-	std::bernoulli_distribution distr(dropout_p);
 
 	for (int l = 0; l < layerNeurons.size() - 1; l++)
 	{
+		std::bernoulli_distribution distr(p_d[l]);
 		VectorXf dropout_masks = VectorXf::Zero(layerNeurons[l]);
 		for (int i = 0; i < dropout_masks.rows(); i++)
 		{
-			if (l != 0)
-				dropout_masks(i) = distr(pseudorandom_generator) + epsilon;
-			else
-				dropout_masks(i) = 1;
+			dropout_masks(i) = distr(pseudorandom_generator);
 		}
-		r.push_back(dropout_masks);
-		std::cout << r[l] << "\n";
+		xi.push_back(dropout_masks);
 	}
 	return this;
 }
@@ -839,13 +943,13 @@ Network* Network::SetRegulariser(RegTerm* _reg_term, float _lambda)
 {
 	reg_term = _reg_term;
 	lambda = _lambda;
-	do_regularisation = 1;
+	do_weightdecay = 1;
 	return this;
 }
 
 VectorXf Network::GetExpectedLabel(int index)
 {
-	return expectedResults[dataset.training_labels(index)];
+	return expectedResults[tr_labels[index]];
 }
 
 void Network::finalize_init()
@@ -870,8 +974,8 @@ void Network::finalize_init()
 
 		if (l > 0)
 		{
-			deltas.push_back(zero_vec);
-			Deltas.push_back(zero);
+			delta.push_back(zero_vec);
+			Delta.push_back(zero);
 
 			MatrixXf w_zero = MatrixXf::Zero(layerNeurons[l], layerNeurons[l - 1]);
 			VectorXf b_zero = VectorXf::Zero(layerNeurons[l]);
@@ -923,8 +1027,7 @@ Network* Network::AddLayer(int n_neurons, const ActivationFunction* _activation_
 	return this;
 }
 
-Network::Network(Dataset _data) 
-: dataset(_data) {}
+Network::Network() {}
 
 // \param input_neurons Aantal neuronen in de inputlaag (aantal pixels in afbeelding)
 // \param output_neurons Aantal neuronen in de outputlaag (aantal verschillende te herkennen getallen)
@@ -956,50 +1059,63 @@ Network::~Network() { delete cost_function; for (auto f : activation_functions) 
 
 void Network::FeedForward(int x, bool is_test)
 {
-	a[0] = (is_test ? dataset.test_images.row(x) : dataset.training_images.row(x));
+	a[0] = is_test ? ts_images.row(x) : tr_images.row(x);
 	for (int l = 1; l < layerNeurons.size(); l++)
 	{
 		if (do_dropout && is_test)
 		{
-			z[l] = (w[l - 1] * dropout_p) * a[l - 1] + b[l - 1];
+			z[l] = (w[l - 1] * p_d[l - 1]) * a[l - 1] + b[l - 1];
 		}
 		else
 		{
 			if (do_dropout)
 			{
-				z[l] = (w[l - 1] * a[l - 1].cwiseProduct(r[l - 1])) + b[l - 1];
+				z[l] = (w[l - 1] * a[l - 1].cwiseProduct(xi[l - 1])) + b[l - 1];
 			}
 			else
 			{
-				z[l] = w[l - 1] * a[l - 1] + b[l - 1]; // Feed-forward voor elke laag.
+				z[l] = w[l - 1] * a[l - 1] + b[l - 1];
 			}
 		}
-
 		activation_functions[l]->Evaluate(a[l], z[l]);
+	} 
+}
+
+// Recursieve feedforward
+VectorXf Network::SimpleFeedForward(VectorXf x, int l)
+{
+	if (l < layerNeurons.size())
+	{
+		x = w[l] * x + b[l];
+		activation_functions[l]->Evaluate(x, x);
+		return SimpleFeedForward(x, ++l);
 	}
+	activation_functions[l]->Evaluate(x, x);
+	return x;
 }
 
 void Network::Batch_FeedForward(int x, bool is_test)
 {
 	for (int i = 0; i < batch_size; i++)
 	{
-		A[0].col(i) = dataset.training_images.row(x + i);
+		A[0].col(i) = tr_images.row(x + i);
 	}
 	for (int l = 1; l < layerNeurons.size(); l++)
 	{
 		if (do_dropout && is_test)
 		{
-			Z[l] = ((w[l - 1] * dropout_p) * A[l - 1]).colwise() + b[l - 1];
+			std::cout << p_d[l] << "\n";
+			Z[l] = ((w[l - 1] * p_d[l - 1]) * A[l - 1]).colwise() + b[l - 1];
 		}
 		else
 		{
 			if (do_dropout && l != layerNeurons.size() - 1)
 			{
-				Z[l] = (w[l - 1] * (A[l - 1].array().colwise() * r[l - 1].array()).matrix()).colwise() + b[l - 1];
+				Z[l] = (w[l - 1] * (A[l - 1].array().colwise() * xi[l - 1].array()).matrix()).colwise() + b[l - 1];
 			}
 			else
 			{
-				Z[l] = (w[l - 1] * A[l - 1]).colwise() + b[l - 1]; // Feed-forward voor elke laag.
+				Z[l] = (w[l - 1] * A[l - 1]).colwise() + b[l - 1]; 
 			}
 		}
 
@@ -1007,12 +1123,26 @@ void Network::Batch_FeedForward(int x, bool is_test)
 	}
 }
 
-int Network::Classify(int x)
+int Network::Classify(MatrixXf& data, int x)
 {
 	FeedForward(x, 1);
 	VectorXf::Index maxIndex;
 	int i = a[layerNeurons.size() - 1].array().maxCoeff(&maxIndex);
 	return maxIndex;
+}
+
+int Network::SimpleClassify(VectorXf x, int l)
+{
+	if (l >= 1 && l < layerNeurons.size())
+	{
+		return SimpleClassify(w[l - 1] * x + b[l], l + 1);
+	}
+	else
+	{
+		VectorXf::Index maxIndex;
+		int i = x.array().maxCoeff(&maxIndex);
+		return maxIndex;
+	}
 }
 
 //typedef std::chrono::time_point<std::chrono::steady_clock> Timer;
@@ -1036,7 +1166,8 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 
 	// Breid de dataset kunstmatig uit; transformeer afbeeldingen x\in[0,10000], vergroot de dataset met 
 	// 10k en vul de nieuwe ruimte met de getransformeerde afbeeldingen.
-	//ExpandData(60000, 70000);
+
+	//ExpandData(60000, 65000);
 
 	//Timer batch_time_begin, batch_time_end;
 	Timer training_timer = Timer("training_time");
@@ -1045,11 +1176,11 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		// De dataset moet gepermuteerd worden voor stochastic gradient descent,
 		// hiervoor maken we een willekeurige permutatiematrix p om de datamatrix mee te vermenigvuldigen.
 		//std::cout << "[Network|Training] Shuffling data matrix..\n";
-		Eigen::PermutationMatrix<Dynamic, Dynamic> p(dataset.training_images.rows());
+		Eigen::PermutationMatrix<Dynamic, Dynamic> p(tr_images.rows());
 		p.setIdentity();
 		std::random_shuffle(p.indices().data(), p.indices().data() + p.indices().size());
-		dataset.training_images = p * dataset.training_images;
-		dataset.training_labels = p * dataset.training_labels;
+		tr_images = p * tr_images;
+		tr_labels = p * tr_labels;
 		//std::cout << "[Network|Training] Data matrix has been shuffled\n";
 
 		for (int l = 1; l < layers; l++)
@@ -1061,17 +1192,19 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		}
 		
 		Timer epoch_timer = Timer("epoch_time");
-		std::cout << "\n";
+		//std::cout << "\n";
 
 		// Doe Stochastic Gradient Descent
-		for (int set_index = 0; set_index + batch_size < dataset.training_images.rows(); set_index += batch_size)
+		for (int set_index = 0; set_index + batch_size < tr_images.rows(); set_index += batch_size)
 		{
 			t = (set_index / batch_size) + 1;
 
+			/*
 			if (set_index % 10000 == 0)
 			{
 				error = 0;
 			}
+			*/
 			
 			// Feed-forward
 			Batch_FeedForward(set_index, 0);
@@ -1082,26 +1215,45 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			{
 				activation_functions[l]->EvaluateDerivative(derivatives, Z[l]);
 				if (l == layers - 1)
-					Deltas[l - 1] = cost_function->GetDeltaL(A[layers - 1], Y, derivatives);
-				else
-					Deltas[l - 1] = (w[l].transpose() * Deltas[l]).cwiseProduct(derivatives);
-				
-				grad_b[l - 1] = Deltas[l - 1].rowwise().sum() / batch_size;
-
-				for (int i = 0; i < batch_size; i++)
 				{
-					grad_w[l - 1] += Deltas[l - 1].col(i) * A[l - 1].col(i).transpose();
+					Delta[l - 1] = cost_function->GetDeltaL(A[layers - 1], Y, derivatives);
+				}
+				else if(do_dropout)
+				{
+					Delta[l - 1] = ((w[l].transpose() * Delta[l]).cwiseProduct(derivatives)).array().colwise() * xi[l].array();
+				}
+				else
+				{
+					Delta[l - 1] = (w[l].transpose() * Delta[l]).cwiseProduct(derivatives);
+				}
+				grad_b[l - 1] = Delta[l - 1].rowwise().sum() / batch_size;
+
+				if (do_dropout)
+				{
+					for (int i = 0; i < batch_size; i++)
+					{
+						grad_w[l - 1] += Delta[l - 1].col(i) * (A[l - 1].col(i).cwiseProduct(xi[l - 1])).transpose();
+					}
+				}
+				else
+				{
+					for (int i = 0; i < batch_size; i++)
+					{
+						grad_w[l - 1] += Delta[l - 1].col(i) * A[l - 1].col(i).transpose();
+					}
 				}
 				grad_w[l - 1] /= batch_size;
 			}
 				
 			// Bereken de fout van deze batch.
+			/*
 			if (set_index % 10000 == 0)
 			{
 				error = cost_function->GetCost(A[layers - 1], Y);
-				if (do_regularisation)
-					error += reg_term->Evaluate(lambda, dataset.training_images.size(), w);
+				if (do_weightdecay)
+					error += reg_term->Evaluate(lambda, tr_images.size(), w);
 			}
+			*/
 
 			// Update de waarden met de gradiënt
 			for (int l = 0; l < layers - 1; l++)
@@ -1135,36 +1287,12 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 				break;
 				case rmsprop_optimizer:
 				{
-					/* 
-					Ik weet nu dat:
-					De cache is op t-1 nog niet NaN, zelfde geldt voor rsqrt.
-					Op t is de cache wel NaN.
-					We kunnen concluderen dat de omslag zich moet bevinden 
-					in de cache-update op tijdstip t, en NIET in de wortel, aangezien de cache EN
-					de wortel NaN zijn op t. 
-					Conclusie: De gradiënt nullt. 
-					*/
-
-					/*
-					if (epoch >= 2 && t > 3000)
-					{
-						std::cout << "cache voor update:\n" << cache_b[l] << "\n\n";
-						std::cout << "gradient:\n" << grad_b[l] << "\n\n";
-					}
-					*/
-
 					cache_w[l] = beta1 * cache_w[l] + (1 - beta1) 
 						* (grad_w[l].cwiseProduct(grad_w[l]));
 
 					cache_b[l] = beta1 * cache_b[l] + (1 - beta1) 
 						* (grad_b[l].cwiseProduct(grad_b[l]));
 
-					/*
-					if (epoch >= 2 && t > 3000)
-					{
-						std::cout << "cache na update:\n" << cache_b[l] << "\n\n";
-					}
-					*/
 
 					delta_w = eta * grad_w[l].cwiseProduct((
 						cache_w[l].array() + epsilon)
@@ -1177,19 +1305,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 					w[l] -= delta_w;
 
 					b[l] -= delta_b;
-
-					/*
-					if (epoch >= 3)
-					{
-						std::cout << "noemer: " << cache_b[l].array() + epsilon << "\n\n";
-						std::cout << "rsqrt: " << (cache_b[l].array() + epsilon).rsqrt() << "\n\n";
-					}
-
-					if (isnan((cache_b[l].array() + epsilon).rsqrt().minCoeff()))
-					{
-						std::cout << "sqrt oops op t=" << t << "\n";
-					}
-					*/
 				}
 				break;
 				case adadelta_optimizer:
@@ -1225,26 +1340,22 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 				break;
 				case adam_optimizer:
 				{
+					float factor = eta * std::sqrt(1 - std::pow(beta2, t)) / (1 - std::pow(beta1, t));
+
 					//=====================//
 					cache_w[l] = beta1 * cache_w[l] + (1 - beta1) * grad_w[l];
 
 					cache_w_2[l] = beta2 * cache_w_2[l] + 
 						(1 - beta2) * (grad_w[l].cwiseProduct(grad_w[l]));
 
-					MatrixXf mw = cache_w[l] / (1.0f - std::pow(beta1, t));
-					MatrixXf vw = cache_w_2[l] / (1.0f - std::pow(beta2, t));
-
-					w[l] -= eta * mw.cwiseProduct((vw.array() + epsilon).rsqrt().matrix());
+					w[l] -= factor * cache_w[l].cwiseProduct((cache_w_2[l].array() + epsilon).rsqrt().matrix());
 					//=====================//
 					cache_b[l] = beta1 * cache_b[l] + (1 - beta1) * grad_b[l];
 
 					cache_b_2[l] = beta2 * cache_b_2[l] +
 						(1 - beta2) * (grad_b[l].cwiseProduct(grad_b[l]));
 
-					MatrixXf mb = cache_b[l] / (1.0f - std::pow(beta1, t));
-					MatrixXf vb = cache_b_2[l] / (1.0f - std::pow(beta2, t));
-
-					b[l] -= eta * mb.cwiseProduct((vb.array() + epsilon).rsqrt().matrix());
+					b[l] -= factor * cache_b[l].cwiseProduct((cache_b_2[l].array() + epsilon).rsqrt().matrix());
 					//=====================//
 				}
 				break;
@@ -1256,38 +1367,49 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 				break;
 				}
 
-				if (do_regularisation)
+				if (do_weightdecay)
 				{
-					w[l] -= eta * reg_term->EvaluateDerivative(lambda, dataset.training_images.rows(), w[l]);
+					w[l] -= eta * reg_term->EvaluateDerivative(lambda, tr_images.rows(), w[l]);
 				}
 				grad_w[l].fill(0);
 				grad_b[l].fill(0);
+
+				if(do_dropout)
+					UpdateDropoutMasks();
 			}
 
+			/*
 			if (set_index % 10000 == 0)
 			{
 				error /= batch_size;
 				if (isnan(error)) error = 0;
 				std::cout << "[Network|Training] Error: " << error << "\n";
 			}
+			*/
 		}
 
 		// Check progress
-		int size = dataset.test_images.rows();
+		int size = ts_images.rows();
 		float accuracy = 0;
 		for (int i = 0; i < size; i++)
-			accuracy += (Classify(i) == dataset.test_labels(i));
+		{
+			accuracy += (Classify(ts_images, i) == ts_labels[i]);
+			//FeedForward(i, 1);
+			//error += cost_function->GetCost(a[layerNeurons.size()], expectedResults[ts_labels[i]]);
+			//if (do_weightdecay)
+				//error += reg_term->Evaluate(lambda, size, w);
+		}
+		//error /= size; 
+
 		std::cout << "[Network|Training] Epochs trained: " << ++epoch << "\n";
 		std::cout << "[Network|Training] Accuracy: " << accuracy << " / " << size << "\n";
+		//std::cout << "[Network|Training] Error: " << error << "\n";
 
 		// Bewaar accuracy en epoch, om later te schrijven naar een csv-bestand.
 		if (track_accuracy)
 		{
 			accuracy_buffer.push_back(accuracy);
 		}
-
-		if (do_dropout)
-			UpdateDropoutMasks();
 	}
 	
 	WriteToCSV(accuracy_buffer);
@@ -1300,45 +1422,48 @@ int main(int argc, char **argv)
 
 	//Eigen::initParallel();
 	omp_set_num_threads(8);
-	Eigen::setNbThreads(0);
+	//Eigen::setNbThreads(0);
 	std::cout << "[Debug] Running Eigen on " << Eigen::nbThreads() << " threads\n";
-	//state = window.loading_state;
-	//visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
+	state = window.loading_state;
+	visual::DataGrid grid(window, &tr_images, pixelSixe, centerX, centerY); 
 
-	//while (true /*!window.isClosed()*/)
-	//{
-		//if (state == window.explore_state)
-		//{
+	while (!window.isClosed())
+	{
+		if (state == window.explore_state)
+		{
 			// TODO: doe dit op een competente manier
-			//grid.draw();
-			//int n = network->Classify(ts_images, grid.dataMatrix_row);
-			//std::cout << "Het netwerk denkt dat dit een " << n << " is.\n";
-			//grid.pollEvents();
-		//}
+			grid.draw();
+			grid.pollEvents();
+		}
 
-		//window.pollEvents();
-		//window.clear();
+		window.pollEvents();
+		window.clear();
 
-		//if (state == window.loading_state)
-		//{
-			//Dataset dataset = init_mnist();
+		if (state == window.loading_state)
+		{
+			init_mnist();
 
-			Network* network = new Network(init_mnist());
-			network->SetCostFunction(loglikelihood_cost);
-			network->AddLayer(784, lrelu_activation);
-			network->AddLayer(32, lrelu_activation);
-			network->AddLayer(32, lrelu_activation);
+			Network* network = new Network();
+
+			network->SetCostFunction(crossentropy_cost);
+			network->AddLayer(784, tanh_activation);
+			network->AddLayer(200, tanh_activation);
+			network->AddLayer(200, tanh_activation);
 			network->AddLayer(10, softmax_activation);
-			network->SetRegulariser(L2_regulariser, 6.0);
-			network->SetOptimizer(network->rmsprop_optimizer, 0.9, 0.9);
+			network->SetRegulariser(L2_regulariser, 32);
+			network->SetOptimizer(network->momentum_optimizer, 0.9, 0.999);
+			//network->SetDropout({ 0.8, 0.5, 0.5});
+
 			network->SetAccuracyTracking();
 
 			network->Train(10, 100, 0.01);
+			
+			grid.init_data();
+			
+			//grid.dataMatrix_row = 60000;
 
-			//grid.init_data();
-
-			//state = window.explore_state;
-		//}
-	//}
+			state = window.explore_state;
+		}
+	}
 	return 0;
 }
