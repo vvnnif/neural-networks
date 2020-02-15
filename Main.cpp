@@ -212,8 +212,6 @@ public:
 		return (s * lambda) / (2 * n);
 	}
 
-	// Dit is eigenlijk niet de afgeleide van de L2-term, maar er kan op deze manier
-	// wel één matrixvermenigvuldigen bespaard worden voor optimalisatie. 
 	MatrixXf EvaluateDerivative(float lambda, int n, MatrixXf& w)
 	{
 		return (lambda / n) * w;
@@ -655,10 +653,15 @@ void Network::WriteToCSV(std::vector<T>& data)
 
 	std::ofstream file(path);
 	file << "Epoch" << "," << "Accuracy" << std::endl;
+	T top_accuracy = 0;
 	for (int i = 0; i < data.size(); i++)
-		file  << i << " " << "," << data[i] << std::endl;
+	{
+		file << i << " " << "," << data[i] << std::endl;
+		data[i] > top_accuracy ? top_accuracy = data[i];
+	}
 	file.close();
 	std::cout << "Successfully wrote data to csv\n";
+	std::cout << "Top accuracy: " << top_accuracy << " / 10000\n";
 }
 
 Network* Network::SetAccuracyTracking()
@@ -1303,7 +1306,6 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 						.rsqrt().matrix());
 
 					w[l] -= delta_w;
-
 					b[l] -= delta_b;
 				}
 				break;
@@ -1446,22 +1448,21 @@ int main(int argc, char **argv)
 			Network* network = new Network();
 
 			network->SetCostFunction(crossentropy_cost);
-			network->AddLayer(784, tanh_activation);
-			network->AddLayer(200, tanh_activation);
-			network->AddLayer(200, tanh_activation);
-			network->AddLayer(10, softmax_activation);
-			network->SetRegulariser(L2_regulariser, 32);
-			network->SetOptimizer(network->momentum_optimizer, 0.9, 0.999);
-			//network->SetDropout({ 0.8, 0.5, 0.5});
+			network->AddLayer(784, sigmoid_activation);
+			network->AddLayer(32, sigmoid_activation);
+			network->AddLayer(32, sigmoid_activation);
+			network->AddLayer(32, sigmoid_activation);
+			network->AddLayer(10, sigmoid_activation);
+			//network->SetRegulariser(L2_regulariser, 32);
+			//network->SetOptimizer(network->none, 0.9, 0.999);
+			//network->SetDropout({ 0.8, 0.5, 0.5, 0.5});
 
 			network->SetAccuracyTracking();
 
-			network->Train(10, 100, 0.01);
+			network->Train(10, 100, 0.05);
 			
 			grid.init_data();
 			
-			//grid.dataMatrix_row = 60000;
-
 			state = window.explore_state;
 		}
 	}
