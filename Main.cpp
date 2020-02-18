@@ -50,13 +50,13 @@ static int state;
 
 const int im_width = 28;
 
-const int win_height = 600, win_width = 800;
+const int win_height = 800, win_width = 1300;
 const char* win_title = "Een interessante titel";
 
 static visual::Window window = visual::Window(win_title, win_width, win_height);
 
 const int pixelSixe = 16; // Grootte van de 'pixels' die getekend worden.
-const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2) - 64;
+const int centerY = (win_height / 2) - ((pixelSixe * 28) / 2);
 const int centerX = (win_width / 2) - ((pixelSixe * 28) / 2);
 
 const float epsilon = 1e-3;
@@ -558,41 +558,43 @@ public:
 	friend class CostFunction;
 	friend class ActivationFunction;
 
-	void FeedForward(int x, bool is_test);
-	void Batch_FeedForward(int x, bool is_test);
-	int Classify(MatrixXf& data, int x);
-	int SimpleClassify(VectorXf x, int l);
-	VectorXf SimpleFeedForward(VectorXf x, int l);
+	void FeedForward(VectorXf x, bool is_test); // Feedforward per afbeelding
+	void Batch_FeedForward(int x, bool is_test); // Feedforward per batch afbeeldingen
+	int Classify(VectorXf x); // Classificieer een afbeelding
+	VectorXf FastClassify(VectorXf x); // Alternatieve, recursieve implementatie niet besproken in verslag
+	VectorXf SimpleFeedForward(VectorXf x, int l); // Alternatieve, recursieve implementatie niet besproken in verslag
 
 	Network* AddLayer(int n_neurons, const ActivationFunction* _activation_function);
 	Network* SetRegulariser(RegTerm* reg_term, float lambda);
 	Network* SetDropout(std::vector<float> p_d);
-	Network* SetAccuracyTracking(std::string name);
-	Network* SetAccuracyTracking();
-	void UpdateDropoutMasks();
+	Network* SetAccuracyTracking(std::string name); // Als waar, sla voortgang op in excel-bestand
+	Network* SetAccuracyTracking(); 
+	void UpdateDropoutMasks(); // Maak nieuwe dropoutvectoren
 	Network* SetOptimizer(int optimizer_id, float beta1, float beta2);
 	Network* SetOptimizer(int optimizer_id, float beta1);
 	Network* SetCostFunction(const CostFunction* _cost_function);
 
-	void ExpandData(int start, int end);
+	void ExpandData(int start, int end); // Niet besproken in verslag
 
-	void finalize_init();
+	void finalize_init(); // Initialiseer de gewichten, biases, enzovoorts
 
-	VectorXf GetExpectedLabel(int index);
-	MatrixXf GetExpectedLabels(int index);
+	VectorXf GetExpectedLabel(int index); // Krijg y-vector voor een bepaalde afbeelding
+	MatrixXf GetExpectedLabels(int index); // Krijg y-matrix voor een batch abeeldingen
 
-	void Train(int batch_size, int epochs, float eta);
+	void Train(int batch_size, int epochs, float eta); // Train het netwerk
 
-	std::vector<MatrixXf> w;
-	std::vector<VectorXf> a, b, z, delta, expectedResults, xi;
-	std::vector<float> p_d;
+	std::vector<MatrixXf> w; // Lagen van gewichten
+	std::vector<VectorXf> a, b, z, delta, expectedResults, xi; // Lagen van vectoren
+	std::vector<float> p_d; // Dropoutkans per laag
 
-	// Voor als het netwerk gevectoriseert is
+	// Voor wanneer het netwerk verder gevectoriseert is
 	std::vector<MatrixXf> A, B, Z, Delta;
 
+	// Gradiënten en \Sigma_t / m_t / v_t voor beide
 	std::vector<VectorXf> grad_b, cache_b, cache_b_2;
 	std::vector<MatrixXf> grad_w, cache_w, cache_w_2;
 
+	// Lijst van geïmplementeerde optimizers (adadelta_optimizer niet besproken in verslag)
 	const enum optimizers{
 		none, 
 		momentum_optimizer, 
@@ -604,22 +606,22 @@ public:
 
 private:
 	template<typename T>
-	void WriteToCSV(std::vector<T>& data);
+	void WriteToCSV(std::vector<T>& data); // Sla data op in excel-bestand
 
-	const CostFunction* cost_function;
-	std::vector<const ActivationFunction*> activation_functions;
-	RegTerm* reg_term;
+	const CostFunction* cost_function; 	// De kostenfunctie van het netwerk
+	std::vector<const ActivationFunction*> activation_functions; // Activatiefuncties per laag
+	RegTerm* reg_term; // Regularisatieterm
 
 	std::vector<int> layerNeurons; // Aantal neuronen per verborgen laag.
-	std::vector<int> accuracy_buffer;
+	std::vector<int> accuracy_buffer; // Houdt de nauwkeurighehid bij
 	
-	float error = 0;
-	float beta1 = 0, beta2 = 0, lambda = 0;
-	bool stop_training = 0, do_weightdecay = 0, do_dropout = 0;
-	bool track_accuracy = 0;
+	float error = 0; // De fout
+	float beta1 = 0, beta2 = 0, lambda = 0; // Hyperparameters
+	bool stop_training = 0, do_weightdecay = 0, do_dropout = 0; 
+	bool track_accuracy = 0; 
 	int optimizer_id = 0, batch_size;
 
-	std::string acc_graph_name;
+	std::string acc_graph_name; // Naam van excel-bestand
 };
 
 Network* Network::SetCostFunction(const CostFunction* _cost_function)
@@ -657,11 +659,11 @@ void Network::WriteToCSV(std::vector<T>& data)
 	for (int i = 0; i < data.size(); i++)
 	{
 		file << i << " " << "," << data[i] << std::endl;
-		data[i] > top_accuracy ? top_accuracy = data[i];
+		if (data[i] > top_accuracy) top_accuracy = data[i];
 	}
 	file.close();
-	std::cout << "Successfully wrote data to csv\n";
-	std::cout << "Top accuracy: " << top_accuracy << " / 10000\n";
+	std::cout << "[Network] Successfully wrote data to csv\n";
+	std::cout << "[Network] Top accuracy: " << top_accuracy << " / 10000\n";
 }
 
 Network* Network::SetAccuracyTracking()
@@ -1060,9 +1062,9 @@ Network::Network(std::vector<int> layer_args, const CostFunction* _cost_function
 
 Network::~Network() { delete cost_function; for (auto f : activation_functions) delete f; }
 
-void Network::FeedForward(int x, bool is_test)
+void Network::FeedForward(VectorXf x, bool is_test)
 {
-	a[0] = is_test ? ts_images.row(x) : tr_images.row(x);
+	a[0] = x; //is_test ? ts_images.row(x) : tr_images.row(x);
 	for (int l = 1; l < layerNeurons.size(); l++)
 	{
 		if (do_dropout && is_test)
@@ -1126,7 +1128,7 @@ void Network::Batch_FeedForward(int x, bool is_test)
 	}
 }
 
-int Network::Classify(MatrixXf& data, int x)
+int Network::Classify(VectorXf x)
 {
 	FeedForward(x, 1);
 	VectorXf::Index maxIndex;
@@ -1134,18 +1136,10 @@ int Network::Classify(MatrixXf& data, int x)
 	return maxIndex;
 }
 
-int Network::SimpleClassify(VectorXf x, int l)
+VectorXf Network::FastClassify(VectorXf x)
 {
-	if (l >= 1 && l < layerNeurons.size())
-	{
-		return SimpleClassify(w[l - 1] * x + b[l], l + 1);
-	}
-	else
-	{
-		VectorXf::Index maxIndex;
-		int i = x.array().maxCoeff(&maxIndex);
-		return maxIndex;
-	}
+	FeedForward(x, 1);
+	return a[layerNeurons.size() - 1];
 }
 
 //typedef std::chrono::time_point<std::chrono::steady_clock> Timer;
@@ -1173,7 +1167,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 	//ExpandData(60000, 65000);
 
 	//Timer batch_time_begin, batch_time_end;
-	Timer training_timer = Timer("training_time");
+	//Timer training_timer = Timer("training_time");
 	while(epoch < num_epochs && !stop_training)
 	{
 		// De dataset moet gepermuteerd worden voor stochastic gradient descent,
@@ -1194,7 +1188,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 			cache_b_2[l - 1].fill(0);
 		}
 		
-		Timer epoch_timer = Timer("epoch_time");
+		//Timer epoch_timer = Timer("epoch_time");
 		//std::cout << "\n";
 
 		// Doe Stochastic Gradient Descent
@@ -1395,7 +1389,7 @@ void Network::Train(int batch_size, int num_epochs, float eta)
 		float accuracy = 0;
 		for (int i = 0; i < size; i++)
 		{
-			accuracy += (Classify(ts_images, i) == ts_labels[i]);
+			accuracy += (Classify(ts_images.row(i)) == ts_labels[i]);
 			//FeedForward(i, 1);
 			//error += cost_function->GetCost(a[layerNeurons.size()], expectedResults[ts_labels[i]]);
 			//if (do_weightdecay)
@@ -1427,44 +1421,48 @@ int main(int argc, char **argv)
 	//Eigen::setNbThreads(0);
 	std::cout << "[Debug] Running Eigen on " << Eigen::nbThreads() << " threads\n";
 	state = window.loading_state;
-	visual::DataGrid grid(window, &tr_images, pixelSixe, centerX, centerY); 
+	visual::DataGrid grid(window, &ts_images, pixelSixe, centerX, centerY); 
+	Network* network = new Network();
 
 	while (!window.isClosed())
 	{
+		if (state == window.loading_state)
+		{
+			init_mnist();
+
+			network->SetCostFunction(crossentropy_cost);
+			network->AddLayer(784, sigmoid_activation);
+			network->AddLayer(80, tanh_activation);
+			network->AddLayer(80, tanh_activation);
+			network->AddLayer(10, softmax_activation);
+			network->SetRegulariser(L2_regulariser, 32);
+			network->SetOptimizer(network->momentum_optimizer, 0.9, 0.999);
+			//network->SetDropout({ 0.8, 0.5, 0.5, 0.5});
+
+			network->SetAccuracyTracking();
+
+			network->Train(10, 20, 0.01);
+			
+			grid.init_data();
+			
+			state = window.explore_state;
+		}
+
 		if (state == window.explore_state)
 		{
 			// TODO: doe dit op een competente manier
+			VectorXf image;
+			if (grid.IsDrawing())
+				image = grid.GetImageVector();
+			else
+				image = ts_images.row(grid.dataMatrix_row);
+			grid.SetDistributionVector(network->FastClassify(image));
 			grid.draw();
 			grid.pollEvents();
 		}
 
 		window.pollEvents();
 		window.clear();
-
-		if (state == window.loading_state)
-		{
-			init_mnist();
-
-			Network* network = new Network();
-
-			network->SetCostFunction(crossentropy_cost);
-			network->AddLayer(784, sigmoid_activation);
-			network->AddLayer(32, sigmoid_activation);
-			network->AddLayer(32, sigmoid_activation);
-			network->AddLayer(32, sigmoid_activation);
-			network->AddLayer(10, sigmoid_activation);
-			//network->SetRegulariser(L2_regulariser, 32);
-			//network->SetOptimizer(network->none, 0.9, 0.999);
-			//network->SetDropout({ 0.8, 0.5, 0.5, 0.5});
-
-			network->SetAccuracyTracking();
-
-			network->Train(10, 100, 0.05);
-			
-			grid.init_data();
-			
-			state = window.explore_state;
-		}
 	}
 	return 0;
 }

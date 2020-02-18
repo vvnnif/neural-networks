@@ -22,7 +22,7 @@ namespace visual
 		void pollEvents();
 		void clear() const;
 		inline bool isClosed() const;
-		static enum window_state { loading_state, menu_state, explore_state, classification_state };
+		static enum window_state { loading_state, menu_state, explore_state, classification_state, draw_state };
 	private:
 		bool init();
 
@@ -40,7 +40,7 @@ namespace visual
 	void Window::clear() const
 	{
 		SDL_RenderPresent(renderer);
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+		SDL_SetRenderDrawColor(renderer, 20, 20, 20, 255);
 		SDL_RenderClear(renderer);
 	}
 
@@ -78,6 +78,7 @@ namespace visual
 
 	bool Window::init()
 	{
+		srand(time(NULL));
 		//=================// Initializeer SDL
 
 		std::cout << "[Graphics] Initializing SDL..\n";
@@ -124,7 +125,6 @@ namespace visual
 	public:
 		Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b);
 		void draw() const;
-	private:
 		int width, height;
 		int x, y;
 		uint r, g, b;
@@ -140,14 +140,50 @@ namespace visual
 		void draw() const;
 		void init_data();
 		void load_data(int row);
+		void clear_data();
+		void make_pixels(int x, int y, int r);
 		void pollEvents();
+		bool IsDrawing();
+		int dataMatrix_row;
+		std::vector<bool> classification_flags;
+		VectorXf GetImageVector();
+		void SetDistributionVector(VectorXf x);
 	private:
 		MatrixXf* data;
-		int pixelScaleFactor;
-		int gridOffset_x, gridOffset_y;
-		int dataMatrix_row;
+		VectorXf distr;
+		const int pixelScaleFactor;
+		const int gridOffset_x, gridOffset_y;
+		int mouse_x = 0, mouse_y = 0;
+		int border_size;
+		int brush_size = 1;
+		const int distr_w = (28 * pixelScaleFactor) / 2;
+		const int distr_h = (28 * pixelScaleFactor) * 0.66f;
+		const int distrOffset = pixelScaleFactor * 2;
+		const int gap_size = 4;
+		bool drawing = 0;
+		bool mouse_hold = 0;
 		std::vector<Pixel*> pixels;
 	};
+
+	void DataGrid::SetDistributionVector(VectorXf x)
+	{
+		this->distr = x;
+	}
+
+	bool DataGrid::IsDrawing()
+	{
+		return drawing;
+	}
+
+	VectorXf DataGrid::GetImageVector()
+	{
+		VectorXf out = VectorXf::Zero(784);
+		for (int i = 0; i < 784; i++)
+		{
+			out(i) = (float) pixels[i]->r / 255.0f;
+		}
+		return out;
+	}
 
 	DataGrid::~DataGrid()
 	{
@@ -160,25 +196,110 @@ namespace visual
 
 		if (SDL_PollEvent(&event))
 		{
+			if (event.type == SDL_MOUSEBUTTONDOWN)
+			{
+				mouse_hold = 1;
+				std::cout << "button down\n";
+			}
+			if (event.type == SDL_MOUSEBUTTONUP)
+			{
+				mouse_hold = 0;
+				std::cout << "button up\n";
+			}
 			if (event.type == SDL_KEYDOWN)
 			{
 				switch (event.key.keysym.sym)
 				{
 				case SDLK_RIGHT:
-					dataMatrix_row < (data->rows() - 1) ? dataMatrix_row++ : 0;
-					load_data(dataMatrix_row);
+					if (!drawing)
+					{
+						dataMatrix_row < (data->rows() - 1) ? dataMatrix_row++ : 0;
+						load_data(dataMatrix_row);
+					}
 					break;
 				case SDLK_LEFT:
-					dataMatrix_row > 0 ? dataMatrix_row-- : 0;
-					load_data(dataMatrix_row);
+					if (!drawing)
+					{
+						dataMatrix_row > 0 ? dataMatrix_row-- : 0;
+						load_data(dataMatrix_row);
+					}
 					break;
 				case SDLK_DOWN:
-					srand(time(NULL));
-					dataMatrix_row = rand() % (data->rows() - 1);
-					load_data(dataMatrix_row);
+					if (!drawing)
+					{
+						dataMatrix_row = rand() % (data->rows() - 1);
+						load_data(dataMatrix_row);
+					}
+					break;
+				case SDLK_j:
+					brush_size++;
+					break;
+				case SDLK_f:
+					brush_size = (brush_size > 0 ? brush_size - 1 : 0);
+					break;
+				case SDLK_d:
+					clear_data();
+					drawing = !drawing;
+					if (drawing == 0)
+						load_data(dataMatrix_row);
+					break;
+				case SDLK_r:
+					if (drawing)
+					{
+						clear_data();
+					}
 					break;
 				}
 			}
+
+			if (mouse_hold && drawing)
+			{
+				make_pixels(event.button.x, event.button.y, brush_size);
+			}
+		}
+	}
+
+	void DataGrid::make_pixels(int x_0, int y_0, int r)
+	{
+		int pixelX_0 = std::floor((x_0 - gridOffset_x) / pixelScaleFactor);
+		int pixelY_0 = std::floor((y_0 - gridOffset_y) / pixelScaleFactor);
+		for (int u = -r; u <= r; u++)
+		{
+			for (int v = -r; v <= r; v++)
+			{
+				int x = x_0 + u * pixelScaleFactor;
+				int y = y_0 + v * pixelScaleFactor;
+				if (x > gridOffset_x && y > gridOffset_y &&
+					x < gridOffset_x + 28 * pixelScaleFactor && y < gridOffset_y + 28 * pixelScaleFactor)
+				{
+					int pixelX = std::floor((x - gridOffset_x) / pixelScaleFactor);
+					int pixelY = std::floor((y - gridOffset_y) / pixelScaleFactor);
+					int xDist = pixelX_0 - pixelX;
+					int yDist = pixelY_0 - pixelY;
+					int dsqr = xDist * xDist + yDist * yDist;
+					if (dsqr <= r * r)
+					{
+						int i = 28 * pixelY + pixelX;
+						int c = min(255, 255 * brush_size / (dsqr + 1));
+						if (c > pixels[i]->r)
+						{
+							pixels[i]->r = c;
+							pixels[i]->g = c;
+							pixels[i]->b = c;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	void DataGrid::clear_data()
+	{
+		for (int i = 0; i < pixels.size(); i++)
+		{
+			pixels[i]->r = 0;
+			pixels[i]->g = 0;
+			pixels[i]->b = 0;
 		}
 	}
 
@@ -198,8 +319,7 @@ namespace visual
 	void DataGrid::load_data(int row)
 	{
 		dataMatrix_row = row;
-		int cols = data->cols();
-		for (int i = 0; i < cols; i++)
+		for (int i = 0; i < data->cols(); i++)
 		{
 			int pixelX = gridOffset_x + ((i % 28) * pixelScaleFactor);
 			int pixelY = gridOffset_y + (std::floor(i / 28) * pixelScaleFactor);
@@ -213,13 +333,45 @@ namespace visual
 		: Window(window), data(_data), pixelScaleFactor(_pixelScaleFactor),
 		gridOffset_x(_gridOffset_x), gridOffset_y(_gridOffset_y)
 	{
+		border_size = 28 * pixelScaleFactor + 2;
 		srand(time(NULL));
 		dataMatrix_row = rand() % (data->rows() - 1);
 	}
 
 	void DataGrid::draw() const
 	{
+		// Getallen
 		for (Pixel* p : pixels) p->draw();
+
+		// Randen
+		SDL_Rect borders;
+		borders.h = border_size;
+		borders.w = border_size;
+		borders.x = gridOffset_x - 1;
+		borders.y = gridOffset_y - 1;
+		SDL_SetRenderDrawColor(renderer, 140, 140, 0, 255);
+		SDL_RenderDrawRect(renderer, &borders);
+		
+		// Kansverdeling
+		for (int i = 0; i < 10; i++)
+		{
+			SDL_Rect bar;
+			SDL_Rect bar_border;
+			int h = (distr_h - 8 * gap_size) / 10;
+			int y_0 = gridOffset_y + ((28 * pixelScaleFactor - distr_h) / 2);
+			bar.w = distr(i) * distr_w;
+			bar.h = h;
+			bar.x = gridOffset_x + 28 * pixelScaleFactor + distrOffset;
+			bar.y = y_0 + i * gap_size + i * h;
+			bar_border.w = distr_w + 2;
+			bar_border.h = h + 2;
+			bar_border.x = bar.x - 1;
+			bar_border.y = bar.y - 1;
+			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+			SDL_RenderFillRect(renderer, &bar);
+			SDL_SetRenderDrawColor(renderer, 140, 140, 0, 255);
+			SDL_RenderDrawRect(renderer, &bar_border);
+		}
 	}
 
 	Pixel::Pixel(const Window& _window, int _width, int _height, int _x, int _y, uint _r, uint _g, uint _b)
